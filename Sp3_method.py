@@ -23,10 +23,9 @@ class Sp3:
         self.sigma_s_U = xs_U[:, 2] # U-238 xs's
         self.sigma_t_U = xs_U[:, 1]
         self.sigma_f   = sigma_f # fission xs's
-        self.EU        = xs_U[:,0] # energy groups
-        self.EH        = xs_H[:,0] # energy groups
-        self.groups    = np.flip(np.log(self.E0/chi[:, 0])) # lethargy groups
+        self.E         = xs_U[:,0] # energy groups
         self.chi       = chi[:, 1] # fission spectrum
+        self.groups    = np.log(self.E0/self.E) # lethargy groups
         self.B2        = B2 # geometric buckling
         self.tol       = 1e-12 # Small value threshold
 
@@ -49,7 +48,6 @@ class Sp3:
     def group_bound(self, A, g):
         """
         Calculate the minimum group a neutron can downscatter to.
-        Do not use for hydrogen! alpha not passed
 
         Parameters:
         g (int): Current energy group index.
@@ -58,9 +56,10 @@ class Sp3:
         Returns:
         int: Minimum group index for downscattering.
         """
-        return np.argmin(np.abs(self.groups - self.groups[g] * self.alpha(A)))
+        target = self.groups[-1] if A == 1 else self.groups[g] + np.log(1 / self.alpha(A))
+        return np.searchsorted(self.groups, target)
 
-    def scat_order(self, A, sigma_s, l, g):
+    def Sn(self,A,sigma_s,l,g):
         """
         Calculate the scattering cross-sections for a given Legendre order.
 
@@ -69,34 +68,34 @@ class Sp3:
         A (int): Atomic Number
         sigma_s (vector): 0th order scattering xs for material with atomic number A
         l (int): Legendre expansion order
-        g (int): Current energy group index
+        g (int): Incident energy group index
 
         Returns:
-        vector: Scattering cross-section for the specified order.
+        vector: Sn for each possible downscatter group
         """
         g_min = self.group_bound(A,g)
+        Sn = np.zeros(g_min-g)
+
         if l == 0:
-            sigma_s[g:g_min] *= 1
-
-        elif l > 0 and l < 4:
-            self.mu_s = np.zeros(g_min - g)
+            self.mu_s = np.ones(g_min-g)
+            mu_0 = self.mu_s
+        
+        elif l == 1:
             for i in range(g,g_min):
-                #FIXME
-                self.mu_s[i-g] = ((A + 1) * np.sqrt(self.groups[g] / self.groups[i]) -
-                                   (A - 1) * np.sqrt(self.groups[i] / self.groups[g])) / 2
-#                if self.mu_s[i-g] > 1 or self.mu_s[i-g] < 1:
-#                    raise ValueError("Mu_s not in range!")
+                self.mu_s[i-g] = ((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) \
+                                  - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2)) / 2
+            mu_0 = self.mu_s
 
-            if l == 1: sigma_s[g:g_min] *= self.mu_s
+        elif l == 2: mu_0 = (3 * self.mu_s ** 2 - 1) / 2
 
-            elif l == 2: sigma_s[g:g_min] *= (3 * self.mu_s ** 2 - 1) / 2
+        elif l == 3: mu_0 = (5 * self.mu_s ** 3 - 3 * self.mu_s) / 2
+        
+        else: raise ValueError("Bad Leg order input")
 
-            elif l == 3: sigma_s[g:g_min] *= (5 * self.mu_s ** 3 - 3 * self.mu_s) / 2
+        for i in range(g,g_min):
+            Sn[i-g] = ((sigma_s[i] * np.exp(self.groups[g] - self.groups[i]) * mu_0[i-g]) / (1 - self.alpha(A))) 
 
-        else:
-            raise ValueError("Legendre order not supported (only 0-3).")
-
-        return sigma_s
+        return Sn
 
     def Ln(self, l, g):
         """
@@ -110,22 +109,30 @@ class Sp3:
         vector: Loss operator for the specified order.
         """
         g_min = self.group_bound(self.AU,g)
-        Sn = np.zeros(self.groups.size)
-
+        Sn_vec = self.Sn(self.AU,self.sigma_s_U,l,g)
+        Sn_integral = np.zeros(g_min-g)
+        assert Sn_vec.size == Sn_integral.size
+        sigma_t_vec = self.sigma_s_U[g:g_min]
+        # do the Sn integration for each energy group
         for i in range(g,g_min):
+            Sn_integral[i-g] = np.trapz(Sn_vec[0:-i],self.groups[g:g_min-i])
+            
+
+#        for i in range(g,g_min):
             #FIXME: many materials
 #            scat_bound_H = self.scat_order(self.AH,self.sigma_s_H, l, g)[g:]
-            scat_bound_U = self.scat_order(self.AU,self.sigma_s_U, l, g)[g:g_min-i]
+#            scat_bound_U = self.Sn(self.AU,self.sigma_s_U, l, g)[g:g_min-i]
 #            Sn[i]        = np.trapz(scat_bound_H, self.groups[g:])
-            Sn[i]        = np.trapz(scat_bound_U, self.groups[g:g_min-i])
+#            Sn[i]        = np.trapz(scat_bound_U, self.groups[g:g_min-i])
 #            Sn[i]       += np.trapz(scat_bound_U, self.groups[g:g_min-i])
 #            if Sn[i] < self.tol: break
 
 #        xs_t_H = self.sigma_t_H[(self.sigma_t_H)< g] = 0
-        xs_t_U = self.sigma_t_U[(self.sigma_t_U < g | ( self.sigma_t_U> g_min))] = 0
+#        xs_t_U = self.sigma_t_U[(self.sigma_t_U < g | ( self.sigma_t_U> g_min))] = 0
             
 #        return (2 * l + 1) * (xs_t_H + xs_t_U - Sn)
-        return (2 * l + 1) * (xs_t_U - Sn)
+#        return (2 * l + 1) * (xs_t_U - Sn)
+        return (2 * l + 1) * (sigma_t_vec - Sn_integral)
 
     def calc_phi0(self):
         """
@@ -136,16 +143,16 @@ class Sp3:
         """
         t1 = time.time()
         for i in range(self.groups.size):
+            g_min = self.group_bound(self.AU,i)
             L0, L1, L2, L3 = [self.Ln(l, i) for l in range(4)]
-            self.L0[:, i] = L0
-            self.L1[:, i] = L1
-            self.L2[:, i] = L2
-            self.L3[:, i] = L3
+            self.L0[i, i:g_min] = L0
+            self.L1[i, i:g_min] = L1
+            self.L2[i, i:g_min] = L2
+            self.L3[i, i:g_min] = L3
             
-            RHS = ((L3 * L2 * L1 + self.B2 * (9 * L1 + 4 * L3)) * self.chi)
+            RHS = ((L3 * L2 * L1 + self.B2 * (9 * L1 + 4 * L3)) * self.chi[i:g_min])
             LHS = (9 * self.B2 ** 2 + self.B2 * (L3 * L2 + (9 * L1 + 4 * L3) * L0) + L3 * L2 * L1 * L0)
-            phi = np.dot(RHS, LHS**(-1))
-            self.phi0[i] = phi
+            self.phi0[i] = np.dot(RHS, LHS**(-1))
 
             if (i + 1) % 100 == 0:
                 print(f"Processed {i + 1} groups. Time elapsed: {np.round(time.time() - t1, 5)}s.")
@@ -162,13 +169,13 @@ class Sp3:
         vector: phi2
         '''
         # check for NAN's
-        Ln = [self.L0,self.L1,self.L2,self.L3]
+        Ln = [self.L0, self.L1, self.L2, self.L3]
         for ind, arr in enumerate(Ln):
             assert not np.isnan(arr).any(), f"Array {ind} contains NaN values"
 
         LHS = self.L3 @ self.L2
         print('LHS Done')
-        RHS = (-9*self.B2*self.phi0 + (9*self.L1 + 4*self.L3) @ (self.L0 @ self.phi0 - self.chi))/2
+        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ self.phi0 - self.chi)) / 2
         print('RHS Done')
         self.phi2 = np.linalg.pinv(LHS) @ RHS
         print('inv Done')
@@ -192,29 +199,28 @@ class Sp3:
         """
         for g in range(self.Q.size):
             g_min = self.group_bound(self.AU,g)
-            self.Q[g] = self.chi[g] 
-            self.Q[g]*= np.trapz(self.sigma_f[g:g_min].flatten()*self.phi0[g:g_min].flatten(),self.groups[g:g_min])
+            self.Q[g] = self.chi[g] * np.trapz(self.sigma_f[g:g_min].flatten() * self.phi0[g:g_min].flatten(),self.groups[g:g_min])
 
         return self.Q
 
     def plot_xs_t(self):
         # plot xs's for H and U vs E
         plt.figure()
-        plt.plot(self.EU,self.sigma_t_U,label=r'$\Sigma_t^U$')
-        plt.plot(self.EH,self.sigma_t_H,label=r'$\Sigma_t^H$')
+        plt.plot(self.E,self.sigma_t_U,label=r'$\Sigma_t^U$')
+        plt.plot(self.E,self.sigma_t_H,label=r'$\Sigma_t^H$')
         plt.xlabel("E")
         plt.ylabel(r"$\Sigma_t$")
-        plt.title(f"XS's for {self.EU.size} groups")
+        plt.title(f"XS's for {self.groups.size} groups")
         plt.yscale("log")
         plt.xscale("log")
         plt.legend()
         plt.grid(True)
-        plt.savefig(f"results/charts/xs_t_{self.EU.size}.png")
+        plt.savefig(f"results/charts/xs_t_{self.groups.size}.png")
 
     def plot_fluxes(self):
         # pretty self explanitory
         plt.figure()
-        plt.plot(self.EU,self.phi0,label=r'$\phi_0$')
+        plt.plot(self.E,self.phi0,label=r'$\phi_0$')
         plt.title(r'$\phi_0(E)$')
         plt.xlabel('E')
         plt.ylabel(r'$\phi_0$')
@@ -224,7 +230,7 @@ class Sp3:
         plt.savefig(f'results/charts/phi0.png')
 
         plt.figure()
-        plt.plot(self.EU,self.phi2,label=r'$\phi_2$')
+        plt.plot(self.E,self.phi2,label=r'$\phi_2$')
         plt.title(r'$\phi_2(E)$')
         plt.xlabel('E')
         plt.ylabel(r'$\phi$')
@@ -248,12 +254,12 @@ class Sp3:
             for j in range(i,g_min):
                 L1 = self.L1[j:g_min,j:g_min]**(-1)
                 L3 = self.L3[j:g_min,j:g_min]**(-1)
-                D0[i,j] = np.trapz((L1@self.Phi0[j:g_min]).squeeze(),self.groups[j:g_min]) / np.trapz(self.Phi0[i:g_min].flatten(),self.groups[i:g_min])
-                D2[i,j] = np.trapz((L3@self.Phi0[j:g_min]).squeeze(),self.groups[j:g_min]) / np.trapz(self.Phi0[i:g_min].flatten(),self.groups[i:g_min])
-                if D0[i,j] < self.tol and D2[i,j] < self.tol:
-                    D0[i,j:] = 0.
-                    D2[i,j:] = 0.
-                    break
+                D0[i,j] = np.trapz((L1 @ self.Phi0[j:g_min]).squeeze(),self.groups[j:g_min]) / np.trapz(self.Phi0[i:g_min],self.groups[i:g_min])
+                D2[i,j] = np.trapz((L3 @ self.Phi0[j:g_min]).squeeze(),self.groups[j:g_min]) / np.trapz(self.Phi0[i:g_min],self.groups[i:g_min])
+#                if D0[i,j] < self.tol and D2[i,j] < self.tol:
+#                    D0[i,j:] = 0.
+#                    D2[i,j:] = 0.
+#                    break
 
         Dn = [D0,D2]
 
@@ -279,8 +285,8 @@ class Sp3:
 
         for g in range(sigma_0_g.size):
             g_min = self.group_bound(A,g)
-            sigma_0_g[g] = np.trapz(sigma_x[g:g_min].flatten()*Phi0[g:g_min].flatten(),self.groups[g:g_min])/np.trapz(Phi0[g:g_min])
-            sigma_2_g[g] = np.trapz(sigma_x[g:g_min].flatten()*Phi2[g:g_min].flatten(),self.groups[g:g_min])/np.trapz(Phi2[g:g_min])
+            sigma_0_g[g] = np.trapz(sigma_x[g:g_min].flatten() * Phi0[g:g_min],self.groups[g:g_min]) / np.trapz(Phi0[g:g_min])
+            sigma_2_g[g] = np.trapz(sigma_x[g:g_min].flatten() * Phi2[g:g_min],self.groups[g:g_min]) / np.trapz(Phi2[g:g_min])
 
         # write updated xs's as a list, return the list
         sigma_g = np.column_stack((sigma_0_g,sigma_2_g))
