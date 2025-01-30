@@ -16,7 +16,7 @@ print(f"Groups = {gridpoints}")
 # init class
 sp3 = Sp3(H,XS38,sigma_f,chi,B2)
 print("plotting sigma_t")
-#sp3.plot_xs_t()
+sp3.plot_xs_t()
 
 # run
 st = time.time()
