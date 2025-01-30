@@ -78,4 +78,3 @@ H[:,2]*=NH
 phi = np.zeros_like(XS38[:,0])
 sigma_b1 = 50 #barns
 sigma_b2 = 5 #barns
-

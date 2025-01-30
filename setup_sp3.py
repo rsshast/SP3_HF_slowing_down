@@ -10,7 +10,7 @@ import os
 ####################################################################
 # user inputs
 E0 = 1e7 #this is set to ensure the first lethargy point is 0 for ease of physics comprehension
-gridpoints = 1000
+gridpoints = 5000
 B2 = 1
 NH = 5
 NU = 1
