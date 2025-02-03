@@ -8,13 +8,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=8
 #SBATCH --mem-per-cpu=100Gb
-#SBATCH --time=0:30:00
+#SBATCH --time=0:10:00
 #SBATCH --account=bckiedro0
 #SBATCH --partition=standard
 #SBATCH --export=ALL
 #SBATCH --output=sp3.out
 
 # The application(s) to execute along with its input arguments and options:
-python3 run_sp3.py
+python3 matrix_sp3.py
 
-#display results/charts/xs_t_1000.png
+display results/charts/phi0.png

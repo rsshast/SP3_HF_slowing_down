@@ -19,16 +19,17 @@ class Sp3:
         self.AH        = 1 # Atomic number of hydrogen
         self.AU        = 238 # Atomic number of U-238
         self.E0        = 1e7 # maximum energy
-        self.sigma_s_H = xs_H[:, 2] # Hydrogen xs's
         self.sigma_t_H = xs_H[:, 1]
-        self.sigma_s_U = xs_U[:, 2] # U-238 xs's
+        self.sigma_s_H = xs_H[:, 2] # Hydrogen xs's
         self.sigma_t_U = xs_U[:, 1]
+        self.sigma_s_U = xs_U[:, 2] # U-238 xs's
         self.sigma_f   = sigma_f # fission xs's
-        self.E         = xs_U[:,0] # energy groups
+        self.E         = np.exp(xs_U[:,0]) # energy groups
         self.chi       = chi[:, 1] # fission spectrum
-        self.groups    = np.log(self.E0/self.E) # lethargy groups
+        self.groups    = xs_U[:,0] # energy groups
+#        self.groups    = np.log(self.E0/self.E) # lethargy groups
         self.B2        = B2 # geometric buckling
-        self.tol       = 1e-12 # Small value threshold
+        self.tol       = 1e-14 # Small value threshold
 
         # Initialize other attributes
         self.phi0 = np.zeros_like(self.groups)
@@ -40,7 +41,6 @@ class Sp3:
         self.L1 = np.zeros_like(self.L0)
         self.L2 = np.zeros_like(self.L0)
         self.L3 = np.zeros_like(self.L0)
-        self.mu_s = None
 
     @staticmethod
     def alpha(A):
@@ -60,97 +60,115 @@ class Sp3:
         target = self.groups[-1] if A == 1 else self.groups[g] + np.log(1 / self.alpha(A))
         return np.searchsorted(self.groups, target)
 
-    def Sn(self,A,sigma_s,l,g):
+    def build_Ln(self, A, sigma_s, sigma_t):
         """
-        Calculate the scattering cross-sections for a given Legendre order.
-
+        build the Ln operators. L0, L1, L2, L3.
+        start by calculating the scattering cosine for the lth moment to get the lth moment xs's
+        
         Parameters:
-        sigma_s (vector): Scattering cross sections
-        A (int): Atomic Number
-        sigma_s (vector): 0th order scattering xs for material with atomic number A
-        l (int): Legendre expansion order
-        g (int): Incident energy group index
+        A (int) : atomic number
+        sigma_s (vector): corresponding P0 scattering xs's
+        sigma_t (vector): corresponding total xs's
 
         Returns:
-        vector: Sn for each possible downscatter group
+        List of gxg matrices: L0, L1, L2, and L3 for a given material
         """
-        g_min = self.group_bound(A,g)
-        Sn = np.zeros(g_min-g)
+        # build gtg xs libraries
+        L0 = np.zeros((self.groups.size,self.groups.size))
+        L1 = np.zeros_like(L0)
+        L2 = np.zeros_like(L0)
+        L3 = np.zeros_like(L0)
+        gridwidth = np.diff(self.groups[:-1])
+        sigma_t = np.diag(sigma_t)
 
-        if l == 0:
-            self.mu_s = np.ones(g_min-g)
-            mu_0 = self.mu_s
-        
-        elif l == 1:
+        # loop over all groups
+        for g in range(self.groups.size):
+            g_min = self.group_bound(A,g)
+            print(g,g_min)
+
+            # start with finding the scattering cosine for L0 -> L3
+            sigma_s0 = sigma_s #s0
+            mu_s = np.zeros(g_min - g)
             for i in range(g,g_min):
-                self.mu_s[i-g] = ((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) \
-                                  - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2)) / 2
-            mu_0 = self.mu_s
+                mu_s[i-g] = (((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) 
+                                    - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2))) / 2
+                # protection
+                if np.abs(mu_s[i-g]) > 1: raise ValueError("Mu not in range")
 
-        elif l == 2: mu_0 = (3 * self.mu_s ** 2 - 1) / 2
+            sigma_s1 = sigma_s[g:g_min]*mu_s #s1
+    
+            sigma_s2 = sigma_s[g:g_min] * (3 * mu_s ** 2 - 1) / 2 #s2
+                
+            sigma_s3 = sigma_s[g:g_min] * (5 * mu_s ** 3 - 3 * mu_s) / 2 #s3
 
-        elif l == 3: mu_0 = (5 * self.mu_s ** 3 - 3 * self.mu_s) / 2
-        
-        else: raise ValueError("Bad Leg order input")
+            for i in range(g,g_min): # for each incident group
+                for j in range(i,g_min): # for the range it can scatter into
+                    L0[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=0,tol=self.tol)
+                    L1[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=1,tol=self.tol)
+                    L2[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=2,tol=self.tol)
+                    L3[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=3,tol=self.tol)
+        #            if L0[j,i] == 0 and  L1[j,i] == 0 and L2[j,i] == 0 and L3[j,i] == 0: break
+            
+        # normalizations
+#        sum_col_0 = L0.sum(axis=0)
+#        sum_col_1 = L1.sum(axis=0)
+#        sum_col_2 = L2.sum(axis=0)
+#        sum_col_3 = L3.sum(axis=0)
+#
+#        for col in range(self.groups.size):
+#            if sum_col_0[col] > 0: L0[col,:] /= sum_col_0[col]
+#            if sum_col_1[col] > 0: L1[col,:] /= sum_col_1[col]
+#            if sum_col_2[col] > 0: L2[col,:] /= sum_col_2[col]
+#            if sum_col_3[col] > 0: L3[col,:] /= sum_col_3[col]
 
-        for i in range(g,g_min):
-            Sn[i-g] = ((sigma_s[i] * np.exp(self.groups[g] - self.groups[i]) * mu_0[i-g]) / (1 - self.alpha(A))) 
+        # plot
+        '''
+        plt.figure()
+        plt.imshow(L0, cmap='plasma', interpolation='none')
+        plt.colorbar()  
+        plt.savefig("L0.png")
+        plt.figure()
+        plt.imshow(L1, cmap='plasma', interpolation='none')
+        plt.colorbar()  
+        plt.savefig("L1.png")
+        plt.figure()
+        plt.imshow(L1, cmap='plasma', interpolation='none')
+        plt.colorbar()  
+        plt.savefig("L2.png")
+        plt.figure()
+        plt.imshow(L3, cmap='plasma', interpolation='none')
+        plt.colorbar()  
+        plt.savefig("L3.png")
+        '''
 
-        return Sn
+        return L0,L1,L2,L3
 
-    def Ln(self, l, g):
+    @staticmethod
+    def calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l,tol):
         """
-        Calculate the net loss operator Ln for a given Legendre order.
+        method to calculate the Ln for element i,j. 
 
-        Parameters:
-        l (int): Legendre expansion order.
-        g (int): Current energy group index.
+        Parameters: too many to list
 
         Returns:
-        vector: Loss operator for the specified order.
+        float: the j,i element of the Ln gtg matrix. 
         """
-        g_min = self.group_bound(self.AU,g)
-        g_end = self.group_bound(self.AH,g)
-        Sn_vec_U = self.Sn(self.AU,self.sigma_s_U,l,g)
-        Sn_vec_H = self.Sn(self.AH,self.sigma_s_U,l,g)
-        Sn_integral_U = np.zeros(self.groups.size - g)
-        Sn_integral_H = np.zeros(self.groups.size - g)
-        counter = 0
+        gw = gridwidth[j] if j < gridwidth.size else gridwidth[-1]
+        if i == j:
+            bound = gridwidth[i] if i < gridwidth.size else gridwidth[-1]
+        elif i < gridwidth.size:
+            bound = np.sum(gridwidth[i:j]) if j < gridwidth.size else np.sum(gridwidth[i:-1])
+        else: 
+            bound = gridwidth[-1]
 
-        # do the Sn integration for each energy group for each material
-        for i in range(g,g_min):
-            Sn_integral_U[i-g] = np.trapz(Sn_vec_U[i:],self.groups[g+i:g_min])
-
-        for i in range(g,self.groups.size):
-            Sn_integral_H[i-g] = np.trapz(Sn_vec_H[i:],self.groups[g+i:-1])
-            counter += 1
-#            if Sn_integral_H[i-g] < self.tol: break
-        
-        # pad the vectors so that they're the same size
-#        Sn_integral_U = self.pad_vector(Sn_integral_U,Sn_integral_H)
-            
-        sigma_t_U = self.sigma_s_U[g:]
-        sigma_t_H = self.sigma_s_H[g:]
-        
-
-#        for i in range(g,g_min):
-            #FIXME: many materials
-#            scat_bound_H = self.scat_order(self.AH,self.sigma_s_H, l, g)[g:]
-#            scat_bound_U = self.Sn(self.AU,self.sigma_s_U, l, g)[g:g_min-i]
-#            Sn[i]        = np.trapz(scat_bound_H, self.groups[g:])
-#            Sn[i]        = np.trapz(scat_bound_U, self.groups[g:g_min-i])
-#            Sn[i]       += np.trapz(scat_bound_U, self.groups[g:g_min-i])
-#            if Sn[i] < self.tol: break
-
-#        xs_t_H = self.sigma_t_H[(self.sigma_t_H)< g] = 0
-#        xs_t_U = self.sigma_t_U[(self.sigma_t_U < g | ( self.sigma_t_U> g_min))] = 0
-            
-#        return (2 * l + 1) * (xs_t_H + xs_t_U - Sn)
-#        return (2 * l + 1) * (xs_t_U - Sn)
-        LU = (2 * l + 1) * (sigma_t_U - Sn_integral_U)
-        LH = (2 * l + 1) * (sigma_t_H - Sn_integral_H)
-
-        return LU + LH
+#        return max(0,(2 * l + 1) * (sigma_t[g,g] - (sigma_s0[j-g] * (bound / gw)
+#                    + sigma_s1[j-g] * (1/3)* (bound / gw)
+#                        + sigma_s2[j-g] * (1/5)* (bound / gw)
+#                            + sigma_s3[j-g] * (1/7)* (bound / gw))))
+        return (2 * l + 1) * (sigma_t[g,g] - (sigma_s0[j-g] * (bound / gw)
+                    + sigma_s1[j-g] * (1/3)* (bound / gw)
+                        + sigma_s2[j-g] * (1/5)* (bound / gw)
+                            + sigma_s3[j-g] * (1/7)* (bound / gw)))
 
     def calc_phi0(self):
         """
@@ -159,26 +177,32 @@ class Sp3:
         Returns:
         np.ndarray: Updated phi0 values.
         """
-        t1 = time.time()
-        for i in range(self.groups.size-1):
-            g_min = self.group_bound(self.AU,i)
-            L0, L1, L2, L3 = [self.Ln(l, i) for l in range(4)]
-            self.L0[i:, i] = L0
-            self.L1[i:, i] = L1
-            self.L2[i:, i] = L2
-            self.L3[i:, i] = L3
-            
-            RHS = ((L3 * L2 * L1 + self.B2 * (9 * L1 + 4 * L3)) * self.chi[i:])
-            LHS = (9 * self.B2 ** 2 + self.B2 * (L3 * L2 + (9 * L1 + 4 * L3) * L0) + L3 * L2 * L1 * L0)
-            self.phi0[i] = np.dot(RHS, LHS**(-1))
+        #t1 = time.time()
+        L0U, L1U, L2U, L3U = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
+#        L0H, L1H, L2H, L3H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
+#        self.L0 = L0U + L0H
+#        self.L1 = L1U + L1H
+#        self.L2 = L2U + L2H
+#        self.L3 = L3U + L3H
+        self.L0 = L0U 
+        self.L1 = L1U 
+        self.L2 = L2U 
+        self.L3 = L3U 
 
-            if (i + 1) % 10 == 0:
-                print(f"Processed {i + 1} groups. Time elapsed: {np.round(time.time() - t1, 5)}s.")
-                t1 = time.time()
-
-#        plt.imshow(self.L3, cmap='plasma', interpolation='nearest')
-#        plt.colorbar()  # Add colorbar to show the scale
+        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
+        LHS = (9 * self.B2 ** 2 + self.B2 * 
+                (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) + self.L3 @ self.L2 @ self.L1 @ self.L0)
+        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
+        print("Determinant of LHS:", np.linalg.det(LHS))
+#        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
+        print("Diag dominant: ", self.is_diagonally_dominant(LHS))
+        self.phi0 = np.linalg.solve(LHS,RHS)
+#        self.phi0 = np.linalg.lstsq(LHS,RHS,rcond=None)[0]
+#        plt.figure()
+#        plt.plot(self.E,abs(self.phi0))
+#        plt.xscale('log')
 #        plt.show()
+
         return self.phi0
 
     @staticmethod
@@ -219,7 +243,7 @@ class Sp3:
         # if diagonally dominant, perform a jacobi iteration in parallel
         if self.is_diagonally_dominant(LHS):
             print("Diagonally Dominant")
-            self.phi2 = jacobi_parallel(LHS,RHS,self.phi2)
+            self.phi2 = self.jacobi_parallel(LHS,RHS,self.phi2)
 
         else: # solve system directly
             print("Not Diagonally Dominant")
