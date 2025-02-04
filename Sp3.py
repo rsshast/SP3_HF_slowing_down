@@ -27,9 +27,8 @@ class Sp3:
         self.E         = np.exp(xs_U[:,0]) # energy groups
         self.chi       = chi[:, 1] # fission spectrum
         self.groups    = xs_U[:,0] # energy groups
-#        self.groups    = np.log(self.E0/self.E) # lethargy groups
         self.B2        = B2 # geometric buckling
-        self.tol       = 1e-14 # Small value threshold
+        self.tol       = 1e-6 # Small value threshold
 
         # Initialize other attributes
         self.phi0 = np.zeros_like(self.groups)
@@ -41,10 +40,6 @@ class Sp3:
         self.L1 = np.zeros_like(self.L0)
         self.L2 = np.zeros_like(self.L0)
         self.L3 = np.zeros_like(self.L0)
-
-    @staticmethod
-    def alpha(A):
-        return ((A - 1) / (A + 1)) ** 2
 
     def group_bound(self, A, g):
         """
@@ -72,103 +67,122 @@ class Sp3:
 
         Returns:
         List of gxg matrices: L0, L1, L2, and L3 for a given material
+        Similar to question 4 on final exam. 
+        double integral. first one over u can be done explicitly, second one over u' must be done numerically
         """
         # build gtg xs libraries
-        L0 = np.zeros((self.groups.size,self.groups.size))
-        L1 = np.zeros_like(L0)
-        L2 = np.zeros_like(L0)
-        L3 = np.zeros_like(L0)
+        sigma_t = np.diag(sigma_t) # diagonal of the total xs's
+
+        # integration matrix corresponding to eqn 4
+        I0, I1, I2, I3 = self.integrate_Sn(A,sigma_s)
+
+        # loss operator corresponding to eqn 5
+        L0 = self._Ln(0,sigma_t,I0)
+        L1 = self._Ln(1,sigma_t,I1)
+        L2 = self._Ln(2,sigma_t,I2)
+        L3 = self._Ln(3,sigma_t,I3)
+            
+        return L0,L1,L2,L3
+
+    def xs_sl(self,A,g,sigma_s):
+        """
+        Calculate the lth moment scattering xs for a given material for a given group
+
+        Parameters:
+        A (int): Atomic Mass Ratio
+        g (int): incident group
+        sigma_s: 0th moment scattering xs for a given material
+
+        Returns:
+        vectors: scattering xs's for moments [0,3]
+        """
+        # start with finding the scattering cosine for L0 -> L3
+        g_min = self.group_bound(A,g)
+        mu_s = np.zeros(g_min - g)
+
+        sigma_s0 = sigma_s #s0
+
+        for i in range(g,g_min):
+            mu_s[i-g] = (((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) 
+                                - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2))) / 2
+            # protection
+            if np.abs(mu_s[i-g]) > 1: raise ValueError("Mu not in range")
+
+        sigma_s1 = sigma_s[g:g_min]*mu_s #s1
+
+        sigma_s2 = sigma_s[g:g_min] * (3 * mu_s ** 2 - 1) / 2 #s2
+            
+        sigma_s3 = sigma_s[g:g_min] * (5 * mu_s ** 3 - 3 * mu_s) / 2 #s3
+
+        return sigma_s0, sigma_s1, sigma_s2, sigma_s3
+
+    def xs_pl(self,A,sigma_s):
+        """
+        calculates the full gtg scattering matrix for the lth order 
+
+        Parameters:
+        A (int): atomic number
+        sigma_s (vector): 0th order scattering xs
+
+        Returns: 
+        4 matrices: gtg scattering matrices for l on the range [0,3]
+        """
+        # scattering xs's for the lth moment
+        S0 = np.zeros_like(self.L0)
+        S1 = np.zeros_like(S0)
+        S2 = np.zeros_like(S0)
+        S3 = np.zeros_like(S0)
         gridwidth = np.diff(self.groups[:-1])
-        sigma_t = np.diag(sigma_t)
+        tol = self.tol
 
         # loop over all groups
         for g in range(self.groups.size):
             g_min = self.group_bound(A,g)
-            print(g,g_min)
+            sigma_s0, sigma_s1, sigma_s2, sigma_s3 = self.xs_sl(A,g,sigma_s) 
+            # Compute group-to-group scattering in lethargy space
+            for i in range(g,g_min):  # Initial group
+                divisor = 1
+                for j in range(g,g_min):  # Scattered-to group
+                    # assumes evenly spaced grid
+                    S0[j,g] = self.SN_mat(sigma_s0[i-g],gridwidth,divisor) 
+                    S1[j,g] = self.SN_mat(sigma_s1[i-g],gridwidth,divisor) 
+                    S2[j,g] = self.SN_mat(sigma_s2[i-g],gridwidth,divisor) 
+                    S3[j,g] = self.SN_mat(sigma_s3[i-g],gridwidth,divisor) 
+                    divisor += 1
 
-            # start with finding the scattering cosine for L0 -> L3
-            sigma_s0 = sigma_s #s0
-            mu_s = np.zeros(g_min - g)
-            for i in range(g,g_min):
-                mu_s[i-g] = (((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) 
-                                    - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2))) / 2
-                # protection
-                if np.abs(mu_s[i-g]) > 1: raise ValueError("Mu not in range")
+                    if S0[j,g] < tol and S1[j,g] < tol and S2[j,g] < tol and S3[j,g] < tol: break
+        
+        return S0, S1, S2, S3
 
-            sigma_s1 = sigma_s[g:g_min]*mu_s #s1
-    
-            sigma_s2 = sigma_s[g:g_min] * (3 * mu_s ** 2 - 1) / 2 #s2
-                
-            sigma_s3 = sigma_s[g:g_min] * (5 * mu_s ** 3 - 3 * mu_s) / 2 #s3
-
-            for i in range(g,g_min): # for each incident group
-                for j in range(i,g_min): # for the range it can scatter into
-                    L0[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=0,tol=self.tol)
-                    L1[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=1,tol=self.tol)
-                    L2[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=2,tol=self.tol)
-                    L3[j,i] = self.calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l=3,tol=self.tol)
-        #            if L0[j,i] == 0 and  L1[j,i] == 0 and L2[j,i] == 0 and L3[j,i] == 0: break
-            
-        # normalizations
-#        sum_col_0 = L0.sum(axis=0)
-#        sum_col_1 = L1.sum(axis=0)
-#        sum_col_2 = L2.sum(axis=0)
-#        sum_col_3 = L3.sum(axis=0)
-#
-#        for col in range(self.groups.size):
-#            if sum_col_0[col] > 0: L0[col,:] /= sum_col_0[col]
-#            if sum_col_1[col] > 0: L1[col,:] /= sum_col_1[col]
-#            if sum_col_2[col] > 0: L2[col,:] /= sum_col_2[col]
-#            if sum_col_3[col] > 0: L3[col,:] /= sum_col_3[col]
-
-        # plot
-        '''
-        plt.figure()
-        plt.imshow(L0, cmap='plasma', interpolation='none')
-        plt.colorbar()  
-        plt.savefig("L0.png")
-        plt.figure()
-        plt.imshow(L1, cmap='plasma', interpolation='none')
-        plt.colorbar()  
-        plt.savefig("L1.png")
-        plt.figure()
-        plt.imshow(L1, cmap='plasma', interpolation='none')
-        plt.colorbar()  
-        plt.savefig("L2.png")
-        plt.figure()
-        plt.imshow(L3, cmap='plasma', interpolation='none')
-        plt.colorbar()  
-        plt.savefig("L3.png")
-        '''
-
-        return L0,L1,L2,L3
-
-    @staticmethod
-    def calc_Ln(sigma_t,sigma_s0,sigma_s1,sigma_s2,sigma_s3,i,j,gridwidth,g,l,tol):
+    def integrate_Sn(self,A,sigma_s):
         """
-        method to calculate the Ln for element i,j. 
+        calculates the scattering integral, eqn 4:
 
-        Parameters: too many to list
+        Parameters:
+        A (int): atomic number
+        sigma_s (vector): 0th order scattering xs
 
-        Returns:
-        float: the j,i element of the Ln gtg matrix. 
+        Returns: 
+        4 matrices: gtg scattering integrals for l on the range [0,3]
         """
-        gw = gridwidth[j] if j < gridwidth.size else gridwidth[-1]
-        if i == j:
-            bound = gridwidth[i] if i < gridwidth.size else gridwidth[-1]
-        elif i < gridwidth.size:
-            bound = np.sum(gridwidth[i:j]) if j < gridwidth.size else np.sum(gridwidth[i:-1])
-        else: 
-            bound = gridwidth[-1]
+        # integration matrices init
+        I0 = np.zeros_like(self.L0)
+        I1 = np.zeros_like(I0)
+        I2 = np.zeros_like(I0)
+        I3 = np.zeros_like(I0)
+        gridwidth = np.diff(self.groups[:-1])
 
-#        return max(0,(2 * l + 1) * (sigma_t[g,g] - (sigma_s0[j-g] * (bound / gw)
-#                    + sigma_s1[j-g] * (1/3)* (bound / gw)
-#                        + sigma_s2[j-g] * (1/5)* (bound / gw)
-#                            + sigma_s3[j-g] * (1/7)* (bound / gw))))
-        return (2 * l + 1) * (sigma_t[g,g] - (sigma_s0[j-g] * (bound / gw)
-                    + sigma_s1[j-g] * (1/3)* (bound / gw)
-                        + sigma_s2[j-g] * (1/5)* (bound / gw)
-                            + sigma_s3[j-g] * (1/7)* (bound / gw)))
+        S0, S1, S2, S3 = self.xs_pl(A,sigma_s)
+        
+        for g in range(self.groups.size):
+            g_min = self.group_bound(A,g)
+            for gg in range(g,g_min):
+                I0[gg,g] += S0[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
+                I1[gg,g] += S1[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
+                I2[gg,g] += S2[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
+                I3[gg,g] += S3[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
+
+        return I0, I1, I2, I3
 
     def calc_phi0(self):
         """
@@ -177,46 +191,32 @@ class Sp3:
         Returns:
         np.ndarray: Updated phi0 values.
         """
-        #t1 = time.time()
+        t1 = time.time()
+        print("Uranium - uh")
         L0U, L1U, L2U, L3U = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
-#        L0H, L1H, L2H, L3H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
-#        self.L0 = L0U + L0H
-#        self.L1 = L1U + L1H
-#        self.L2 = L2U + L2H
-#        self.L3 = L3U + L3H
-        self.L0 = L0U 
-        self.L1 = L1U 
-        self.L2 = L2U 
-        self.L3 = L3U 
+        print("Hydrogen")
+        L0H, L1H, L2H, L3H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
+        print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
+        self.L0 = L0U + L0H
+        self.L1 = L1U + L1H
+        self.L2 = L2U + L2H
+        self.L3 = L3U + L3H
 
-        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
+        # matrix
         LHS = (9 * self.B2 ** 2 + self.B2 * 
-                (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) + self.L3 @ self.L2 @ self.L1 @ self.L0)
-        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
-        print("Determinant of LHS:", np.linalg.det(LHS))
-#        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
-        print("Diag dominant: ", self.is_diagonally_dominant(LHS))
-        self.phi0 = np.linalg.solve(LHS,RHS)
-#        self.phi0 = np.linalg.lstsq(LHS,RHS,rcond=None)[0]
-#        plt.figure()
-#        plt.plot(self.E,abs(self.phi0))
-#        plt.xscale('log')
-#        plt.show()
+                (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
+                    + self.L3 @ self.L2 @ self.L1 @ self.L0)
+        # vector
+        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
+
+        self.print_mat_properties(LHS)
+
+        # Ax = b
+        self.phi0 = (self.jacobi_parallel(LHS,RHS,self.phi0) 
+                        if self.is_diagonally_dominant(LHS) 
+                            else np.linalg.solve(LHS,RHS))
 
         return self.phi0
-
-    @staticmethod
-    def is_diagonally_dominant(A):
-        # Get the number of rows (or columns) in the matrix
-        n = A.shape[0]
-    
-        # Check each row for diagonal dominance
-        for i in range(n):
-            row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  # Sum of non-diagonal elements
-            if np.abs(A[i, i]) < row_sum:
-                return False
-
-        return True
 
     def calc_phi2(self):
         '''
@@ -226,37 +226,25 @@ class Sp3:
         Returns:
         vector: phi2
         '''
-        # check for NAN's
-        Ln = [self.L0, self.L1, self.L2, self.L3]
-        for ind, arr in enumerate(Ln):
-            assert not np.isnan(arr).any(), f"Array {ind} contains NaN values"
+        # compute LHS and RHS
+        LHS = self.L3 @ self.L2 # matrix
+        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
 
-#        plt.imshow(self.L1, cmap='plasma', interpolation='nearest')
-#        plt.colorbar()  
-#        plt.show()
+        self.print_mat_properties(LHS)
 
-        LHS = self.L3 @ self.L2
-        print('LHS Done')
-        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ self.phi0 - self.chi)) / 2
-        print('RHS Done')
-
-        # if diagonally dominant, perform a jacobi iteration in parallel
-        if self.is_diagonally_dominant(LHS):
-            print("Diagonally Dominant")
-            self.phi2 = self.jacobi_parallel(LHS,RHS,self.phi2)
-
-        else: # solve system directly
-            print("Not Diagonally Dominant")
-            self.phi2 = np.linalg.solve(LHS,RHS)
-#            self.phi2 = np.linalg.lstsq(LHS,RHS,rcond=None)[0]
-
-        print('inv Done')
+        # Ax = b
+        self.phi2 = (self.jacobi_parallel(LHS,RHS,self.phi2) 
+                        if self.is_diagonally_dominant(LHS) 
+                            else np.linalg.solve(LHS,RHS))
 
         return self.phi2
 
     def calc_Phi(self):
         """
         Combine phi0 and phi2 to calculate the scalar flux moments Phi0 and Phi2.
+        
+        Returns: 
+        None
         """
         self.Phi2 = self.phi2
         self.Phi0 = self.phi0 + 2 * self.phi2
@@ -271,7 +259,8 @@ class Sp3:
         """
         for g in range(self.Q.size):
             g_min = self.group_bound(self.AU,g)
-            self.Q[g] = self.chi[g] * np.trapz(self.sigma_f[g:g_min].flatten() * self.phi0[g:g_min].flatten(),self.groups[g:g_min])
+            self.Q[g] = (self.chi[g] * np.trapz(self.sigma_f[g:g_min].flatten() 
+                            * self.phi0[g:g_min].flatten(),self.groups[g:g_min]))
 
         return self.Q
 
@@ -290,7 +279,7 @@ class Sp3:
         plt.savefig(f"results/charts/xs_t_{self.groups.size}.png")
 
     def plot_fluxes(self):
-        # pretty self explanitory
+        # plot phi0 and phi2
         plt.figure()
         plt.plot(self.E,self.phi0,label=r'$\phi_0$')
         plt.title(r'$\phi_0(E)$')
@@ -432,6 +421,9 @@ class Sp3:
         return df
 
     def jacobi_parallel(self,A, b, x0, eps=1e-6, max_iter=1000):
+        """
+        Jacobi iteration for parallel computing
+        """
         n = len(A)
         x = x0.copy()
         x_new = np.zeros_like(x)
@@ -459,13 +451,85 @@ class Sp3:
         return x_new
 
     @staticmethod
+    def alpha(A):
+        """
+        calculate the scattering parameter for a given element
+        Parameters:
+        A (int): Mass Ratio
+
+        Returns
+        float
+        """
+        return ((A - 1) / (A + 1)) ** 2
+
+    def print_mat_properties(self,LHS):
+        """
+        prints important matrix properties
+
+        Parameters:
+        LHS (matrix): matrix of interest
+
+        Returns:
+        None
+        """
+        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
+        print("Determinant of LHS:", np.linalg.det(LHS))
+        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
+        print("Diag dominant: ", self.is_diagonally_dominant(LHS))
+
+    @staticmethod
     def jacobi_update(A, b, x, x_new, i):
+        """
+        helper function for the jacobi loop. Not sure what this is doing
+        """
         row_sum = np.dot(A[i, :], x)  # Compute the row sum
         x_new[i] = (b[i] - (row_sum - A[i, i] * x[i])) / A[i, i]  # Update x[i]
     
     @staticmethod
-    def pad_vector(v1, v2):
-        size_diff = len(v2) - len(v1)
-        if size_diff > 0:
-            v1 = np.pad(v1, (0, size_diff), mode='constant', constant_values=0)
-        return v1
+    def SN_mat(sigma,gridwidth,divisor):
+        """
+        calculate each parameter in the gtg scattering matrix
+
+        Parameters:
+        sigma (vector): lth order scattering xs
+        gridwidth (float): lethargy grid spacing
+        divisor (int): how many points exist between the lethargy grids
+
+        Returns:
+        float: scattering xs for group g' into group g
+        """
+        return sigma * gridwidth[-1] / divisor
+
+    @staticmethod
+    def _Ln(l,sigma,I): 
+        """
+        calculates the Loss operator for order l
+
+        Parameters: 
+        l (int): expansion order
+        sigma (matrix): total xs
+        I (matrix): integration matrix for order l
+
+        Returns: 
+        matrix: Loss operator for order l
+        """
+        return (2 * l + 1) * (sigma - I)
+
+    @staticmethod
+    def is_diagonally_dominant(A):
+        """
+        checks if a matrix is diagonally dominant
+
+        Parameters:
+        A (matrix): matrix in question
+
+        Returns: 
+        bool: True if matrix is diagonally dominant
+        """
+        # loop over rows
+        for i in range(A.shape[0]):
+            row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  # Sum of non-diagonals
+            if np.abs(A[i, i]) < row_sum:
+                return False
+
+        return True
