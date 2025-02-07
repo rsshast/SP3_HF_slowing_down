@@ -20,14 +20,9 @@ def get_data(data, gridpoints, N):
     data = data[(data[:, 0] <= E0) & (data[:, 0] >= 1)]  
     data[:, 0] = np.log(data[:, 0])
 
-    # Define original and new grid
-    grid = data[:, 0]
+    # Define new grid
     new_grid = np.linspace(np.log(1), np.log(E0), gridpoints)
-    if data.shape[0] > gridpoints:
-        new_data = np.vstack([np.interp(new_grid, grid, data[:, i]) for i in range(data.shape[1])]).T
-    else:
-        new_data = (np.vstack([np.interp(new_grid, grid, data[:, i], left=data[0, i], right=data[-1, i]) 
-                    for i in range(data.shape[1])]).T)
+    new_data = np.vstack([np.interp(new_grid, data[:,0], data[:, i]) for i in range(data.shape[1])]).T
 
     return new_data
 

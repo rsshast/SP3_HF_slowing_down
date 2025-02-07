@@ -31,29 +31,179 @@ class Sp3:
         self.tol       = 1e-6 # Small value threshold
 
         # Initialize other attributes
-        self.phi0 = np.zeros_like(self.groups)
-        self.phi2 = np.zeros_like(self.groups)
-        self.Phi0 = np.zeros_like(self.groups)
-        self.Phi2 = np.zeros_like(self.groups)
-        self.Q = np.zeros_like(self.groups)
-        self.L0 = np.zeros((self.groups.size,self.groups.size))
-        self.L1 = np.zeros_like(self.L0)
-        self.L2 = np.zeros_like(self.L0)
-        self.L3 = np.zeros_like(self.L0)
+        self.phi0 = None
+        self.phi2 = None
+        self.Phi0 = None
+        self.Phi2 = None
+        self.Q    = None
+        self.L0   = np.zeros((self.groups.size,self.groups.size))
+        self.L1   = None
+        self.L2   = None
+        self.L3   = None
+        self.mu_s = None
 
     def group_bound(self, A, g):
         """
         Calculate the minimum group a neutron can downscatter to.
+        CONSTANT GRIDSPACING
+        For Hydrogen, lim alpha -> 0 1/alpha = \inf, therefore no top lethargy bound
+        For heavier isotopes (Uranium) we have 2 cases (no clipping):
+        Take the minimum of (u + ln (1/alpha)) and gridwidth of lethargy grid 
+        you can pass a function in here instead of the value. 
 
         Parameters:
-        g (int): Current energy group index.
         A (int): Atomic Number:
+        g (int): Current energy group index.
 
         Returns:
         int: Minimum group index for downscattering.
         """
-        target = self.groups[-1] if A == 1 else self.groups[g] + np.log(1 / self.alpha(A))
-        return np.searchsorted(self.groups, target)
+        if A == 1:
+            return self.groups.size
+        else: # assumes constant grid spacing
+            # when lethargy width is less than the gridwidth
+            t1 = self.groups[g] + np.log(1 / self.alpha(A))
+            return np.searchsorted(self.groups, t1)
+
+    def xs_gtg(self,sigma_s0,A):
+        """
+        find the gtg scattering matrix for s0
+
+        Parameters: 
+        sigma_s0 (vector): l = 0 group xs's
+        A (int): Mass Ratio
+
+        returns:
+        matrix: gtg xs's for l = 0
+        """
+        # Initialize
+        sigma_gtg = np.zeros_like(self.L0)
+
+        # Incident lethargy
+        for g in range(self.groups.size):
+            u_low = self.groups[g]
+            u_high = self.group_bound(A,g)
+            xs_s = sigma_s0[g]
+
+            # Compute fractional contributions for scattering
+            fractions = np.zeros(self.groups.size)  # Initialize array to match the size of sigma
+            total_fraction = 0.0
+
+            # Outgoing lethargy groups obeying scattering ranges (upper triangular)
+            for gg in range(g, min(u_high, self.groups.size)):  # Scattering to higher lethargy
+                u_target_low = self.groups[gg]
+                u_target_high = self.group_bound(A, gg)
+
+                # Lethargy bin overlap
+                overlap = max(0, min(u_high, u_target_high) - max(u_low, u_target_low))
+                fraction = overlap / (u_high - u_low) if (u_high - u_low) > 0 else 0
+
+                # Append fraction for the target group
+                fractions[gg] = fraction
+                total_fraction += fraction
+
+                # Exit early if the fraction is very small (for efficiency)
+                if fraction < self.tol: break
+
+            # Normalize contributions: normalize each group so total fraction sums to 1
+            if total_fraction > 0:
+                fractions /= total_fraction
+
+            # Build matrix (only upper triangle)
+            sigma_gtg[g, :] = xs_s * fractions
+
+        # Normalize each row to sigma[g]
+        row_sums = np.sum(sigma_gtg, axis=1)
+        for g in range(self.groups.size):
+            if row_sums[g] > 0:
+                sigma_gtg[g, :] *= sigma_s0[g] / row_sums[g]
+
+        return sigma_gtg
+
+
+    def xs_sl(self,A,sigma_s0,l):
+        """
+        Calculate the lth moment scattering xs for a given material for a given group
+
+        Parameters:
+        A (int): Atomic Mass Ratio
+        g (int): incident group
+        sigma_s (matrix): 0th moment scattering xs for a given material
+
+        Returns:
+        vectors: scattering xs's for moments [0,3]
+        """
+        self.mu_s = np.zeros_like(self.L0)
+        if l == 1:
+            for g in range(self.groups.size):   
+                print(g)
+                for i in range(g,self.group_bound(A,g)):
+                    self.mu_s[g,i]  = (((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) 
+                                            - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2))) / 2
+                    if np.abs(self.mu_s[g,i]) > 1: raise ValueError("Mu not in range")
+                    self.mu_s[g,i] *= (np.exp(self.groups[g] - self.groups[i])/(1 - self.alpha(A)))
+            
+            return sigma_s0 @ self.mu_s
+
+
+        elif l == 2: mu = ((3 * self.mu_s ** 2 - 1) / 2)
+
+        elif l == 3: mu = ((5 * self.mu_s ** 3 - 3 * self.mu_s) / 2)
+
+        return sigma_s0 @ mu
+
+    def calc_xs_l(self,sigma_s_0,A):
+        """
+        build full gxg matrix of scattering xs's for l = [0,3]
+
+        Parameters:
+        sigma_s_0 (vector): l = 0 xs's for a given material
+        A (int): Mass Ratio
+
+        Returns: 
+        4 matrices: gtg scattering xs's 
+        """
+        # get the 0th moment gtg xs's
+        sigma_s0 = self.xs_gtg(sigma_s_0,A)
+        S0 = sigma_s0
+
+        # get the rest of the orders 
+        S_vals = [self.xs_sl(A,sigma_s0,l) for l in range(1,4)]
+        S1, S2, S3 = S_vals
+
+        return S0, S1, S2, S3
+
+    def integrate_Sn(self,sigma_s0,A):
+        """
+        eqn 4, integrate the cross sections to create the Sn matrix for order l
+
+        Parameters:
+        sigma_s0 (vector): s0 xs's for a material to calculate the lth order xs's
+        A (int): Mass ratio
+
+        Return:
+        4 matrices: Sn operator matrices
+        """
+        # Initialize I_vals and compute S_vals
+        I_vals = [np.zeros_like(self.L0) for _ in range(4)]
+        S_vals = self.calc_xs_l(sigma_s0, A)
+        
+        # Perform integration
+        gridwidth = self.groups[1] - self.groups[0]
+        
+        for i in range(self.groups.size):
+            g_min = self.group_bound(A,i)
+            for j in range(i, g_min):
+                g_bound = min(g_min, self.groups[-1])
+                factor = (g_bound - g_min) + (g_min - j)
+                
+                for idx in range(4):
+                    I_vals[idx][i, i] += S_vals[idx][i, j] * factor * gridwidth
+        
+        # Deallocate S_vals and return results
+        self.deallocate([S_vals])
+
+        return I_vals
 
     def build_Ln(self, A, sigma_s, sigma_t):
         """
@@ -74,115 +224,12 @@ class Sp3:
         sigma_t = np.diag(sigma_t) # diagonal of the total xs's
 
         # integration matrix corresponding to eqn 4
-        I0, I1, I2, I3 = self.integrate_Sn(A,sigma_s)
+        I_vals = self.integrate_Sn(sigma_s,A)
 
         # loss operator corresponding to eqn 5
-        L0 = self._Ln(0,sigma_t,I0)
-        L1 = self._Ln(1,sigma_t,I1)
-        L2 = self._Ln(2,sigma_t,I2)
-        L3 = self._Ln(3,sigma_t,I3)
-            
-        return L0,L1,L2,L3
+        L_vals = [self._Ln(n, sigma_t, I_vals[n]) for n in range(4)]
 
-    def xs_sl(self,A,g,sigma_s):
-        """
-        Calculate the lth moment scattering xs for a given material for a given group
-
-        Parameters:
-        A (int): Atomic Mass Ratio
-        g (int): incident group
-        sigma_s: 0th moment scattering xs for a given material
-
-        Returns:
-        vectors: scattering xs's for moments [0,3]
-        """
-        # start with finding the scattering cosine for L0 -> L3
-        g_min = self.group_bound(A,g)
-        mu_s = np.zeros(g_min - g)
-
-        sigma_s0 = sigma_s #s0
-
-        for i in range(g,g_min):
-            mu_s[i-g] = (((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) 
-                                - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2))) / 2
-            # protection
-            if np.abs(mu_s[i-g]) > 1: raise ValueError("Mu not in range")
-
-        sigma_s1 = sigma_s[g:g_min]*mu_s #s1
-
-        sigma_s2 = sigma_s[g:g_min] * (3 * mu_s ** 2 - 1) / 2 #s2
-            
-        sigma_s3 = sigma_s[g:g_min] * (5 * mu_s ** 3 - 3 * mu_s) / 2 #s3
-
-        return sigma_s0, sigma_s1, sigma_s2, sigma_s3
-
-    def xs_pl(self,A,sigma_s):
-        """
-        calculates the full gtg scattering matrix for the lth order 
-
-        Parameters:
-        A (int): atomic number
-        sigma_s (vector): 0th order scattering xs
-
-        Returns: 
-        4 matrices: gtg scattering matrices for l on the range [0,3]
-        """
-        # scattering xs's for the lth moment
-        S0 = np.zeros_like(self.L0)
-        S1 = np.zeros_like(S0)
-        S2 = np.zeros_like(S0)
-        S3 = np.zeros_like(S0)
-        gridwidth = np.diff(self.groups[:-1])
-        tol = self.tol
-
-        # loop over all groups
-        for g in range(self.groups.size):
-            g_min = self.group_bound(A,g)
-            sigma_s0, sigma_s1, sigma_s2, sigma_s3 = self.xs_sl(A,g,sigma_s) 
-            # Compute group-to-group scattering in lethargy space
-            for i in range(g,g_min):  # Initial group
-                divisor = 1
-                for j in range(g,g_min):  # Scattered-to group
-                    # assumes evenly spaced grid
-                    S0[j,g] = self.SN_mat(sigma_s0[i-g],gridwidth,divisor) 
-                    S1[j,g] = self.SN_mat(sigma_s1[i-g],gridwidth,divisor) 
-                    S2[j,g] = self.SN_mat(sigma_s2[i-g],gridwidth,divisor) 
-                    S3[j,g] = self.SN_mat(sigma_s3[i-g],gridwidth,divisor) 
-                    divisor += 1
-
-                    if S0[j,g] < tol and S1[j,g] < tol and S2[j,g] < tol and S3[j,g] < tol: break
-        
-        return S0, S1, S2, S3
-
-    def integrate_Sn(self,A,sigma_s):
-        """
-        calculates the scattering integral, eqn 4:
-
-        Parameters:
-        A (int): atomic number
-        sigma_s (vector): 0th order scattering xs
-
-        Returns: 
-        4 matrices: gtg scattering integrals for l on the range [0,3]
-        """
-        # integration matrices init
-        I0 = np.zeros_like(self.L0)
-        I1 = np.zeros_like(I0)
-        I2 = np.zeros_like(I0)
-        I3 = np.zeros_like(I0)
-        gridwidth = np.diff(self.groups[:-1])
-
-        S0, S1, S2, S3 = self.xs_pl(A,sigma_s)
-        
-        for g in range(self.groups.size):
-            g_min = self.group_bound(A,g)
-            for gg in range(g,g_min):
-                I0[gg,g] += S0[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
-                I1[gg,g] += S1[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
-                I2[gg,g] += S2[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
-                I3[gg,g] += S3[gg,g]*np.exp(self.groups[gg] - self.groups[g]) * gridwidth[-1]
-
-        return I0, I1, I2, I3
+        return L_vals
 
     def calc_phi0(self):
         """
@@ -192,29 +239,33 @@ class Sp3:
         np.ndarray: Updated phi0 values.
         """
         t1 = time.time()
-        print("Uranium - uh")
-        L0U, L1U, L2U, L3U = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
-        print("Hydrogen")
-        L0H, L1H, L2H, L3H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
-        print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
-        self.L0 = L0U + L0H
-        self.L1 = L1U + L1H
-        self.L2 = L2U + L2H
-        self.L3 = L3U + L3H
+        print("U-238")
+        L_vals_U  = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
+        print("H-1")
+        L_vals_H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
 
-        # matrix
-        LHS = (9 * self.B2 ** 2 + self.B2 * 
-                (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
+        self.L0 = L_vals_U[0] + L_vals_H[0]
+        self.L1 = L_vals_U[1] + L_vals_H[1]
+        self.L2 = L_vals_U[2] + L_vals_H[2]
+        self.L3 = L_vals_U[3] + L_vals_H[3]
+        
+        print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
+
+        # compute LHS and RHS
+        LHS = (9 * self.B2 ** 2 + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
                     + self.L3 @ self.L2 @ self.L1 @ self.L0)
-        # vector
         RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
 
         self.print_mat_properties(LHS)
 
         # Ax = b
+        self.phi0 = np.zeros_like(self.groups)
         self.phi0 = (self.jacobi_parallel(LHS,RHS,self.phi0) 
                         if self.is_diagonally_dominant(LHS) 
                             else np.linalg.solve(LHS,RHS))
+        
+        # deallocate
+        self.deallocate([LHS,RHS])
 
         return self.phi0
 
@@ -233,9 +284,14 @@ class Sp3:
         self.print_mat_properties(LHS)
 
         # Ax = b
+        self.phi2 = np.zeros_like(self.phi0)
         self.phi2 = (self.jacobi_parallel(LHS,RHS,self.phi2) 
                         if self.is_diagonally_dominant(LHS) 
                             else np.linalg.solve(LHS,RHS))
+
+        # deallocate
+        del LHS
+        del RHS
 
         return self.phi2
 
@@ -395,9 +451,9 @@ class Sp3:
         print("Starting Phi0 and Phi2 calculation...")
         self.calc_Phi()
 
-        print("New cross sections and Diffusion Coefs...")
+        #print("New cross sections and Diffusion Coefs...")
         # fission source Q
-        Q = self.fission_source()
+        #Q = self.fission_source()
 
         # generate diffusion coefs
 #        coefs_DU = self.diffusion_coef(self.AU)
@@ -533,3 +589,9 @@ class Sp3:
                 return False
 
         return True
+
+    @staticmethod
+    def deallocate(my_list):
+        for obj in my_list:
+            del obj 
+        my_list.clear()  
