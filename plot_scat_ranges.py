@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from setup_sp3 import * 
+from setup_sp3 import alphaU, get_data, XS38, gridpoints, NU 
 
 # Integration bounds for scattering range.
 # Take the MINIMUM of the bounds between u' (incident) and the minumum of g_min,u+ln(1/alpha)
@@ -13,15 +13,14 @@ shading_colors = ['lightgreen', 'yellow', 'blue']
 m = len(shading_colors)
 
 # Functions. u incident, u' outgoing
-alpha = ((AU - 1) / (AU + 1)) ** 2
 u_vals = np.linspace(0, m * gridwidth,200)
 y_u    = u_vals  
-y_u_ln = u_vals + np.log(1 / alpha)  # y = x + ln(1/alpha) (red line)
+y_u_ln = u_vals + np.log(1 / alphaU)  # y = x + ln(1/alpha) (red line)
 
 # Create the plot
 plt.figure(figsize=(7, 7))
-plt.plot(u_vals, y_u, 'black', label="Min: u' = u")
-plt.plot(u_vals, y_u_ln, 'red', label=r"Max: u' = u + $\ln(1/\alpha)$")
+plt.plot(u_vals, y_u, 'black', label="Min: u = u'")
+plt.plot(u_vals, y_u_ln, 'red', label=r"Max: u = u' + $\ln(1/\alpha)$")
 
 for n in range(m + 1):  # for each shaded region
     grid_y = n * gridwidth
@@ -39,10 +38,12 @@ for n in range(m + 1):  # for each shaded region
         valid_shading = (y_upper > y_lower) & mask # Apply mask to ensure shading only occurs in the valid region
         plt.fill_between(u_vals, y_lower, y_upper, where=valid_shading, color=shading_colors[n], alpha=0.5) # Fill
 
-plt.xlabel("u")
-plt.ylabel("u'")
-plt.xlim(0,m*gridwidth)
-plt.ylim(0,m*gridwidth)
+plt.xlabel("u'")
+plt.ylabel("u")
+#plt.xlim(0,m*gridwidth)
+#plt.ylim(0,m*gridwidth)
 plt.title("Integration Bounds")
 plt.legend()
+plt.grid(True, linestyle='dotted', alpha=1.0)
+plt.show()
 plt.savefig("results/charts/integration_bounds.png")
