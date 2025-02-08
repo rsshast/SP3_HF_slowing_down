@@ -11,8 +11,6 @@ H = get_data(H,gridpoints,NH)
 XS38 = get_data(XS38,gridpoints,NU)
 sigma_f = get_fission_data(XS38[:,0],sigma_f)
 print(f"Data Read, time = {np.round(time.time() - t_data,5)}s")
-print(XS38[1,0] - XS38[0,0])
-print(np.log(1/alphaU))
 
 # init class
 sp3 = Sp3(H,XS38,sigma_f,chi,B2)
