@@ -4,6 +4,7 @@ import time
 import matplotlib.pyplot as plt
 import os
 import concurrent.futures
+from numba import njit, prange
 
 class Sp3:
     def __init__(self, xs_H, xs_U, sigma_f, chi, B2):
@@ -124,6 +125,7 @@ class Sp3:
     def xs_sl(self,A,sigma_s0,l):
         """
         Calculate the lth moment scattering xs for a given material for a given group
+        Now works in parallel
 
         Parameters:
         A (int): Atomic Mass Ratio
@@ -134,17 +136,28 @@ class Sp3:
         vectors: scattering xs's for moments [0,3]
         """
         self.mu_s = np.zeros_like(self.L0)
-        if l == 1:
-            for g in range(self.groups.size):   
-                print(g)
-                for i in range(g,self.group_bound(A,g)):
-                    self.mu_s[g,i]  = (((A + 1) * np.exp((self.groups[g] - self.groups[i]) / 2)) 
-                                            - ((A - 1) * np.exp((self.groups[i] - self.groups[g]) / 2))) / 2
-                    if np.abs(self.mu_s[g,i]) > 1: raise ValueError("Mu not in range")
-                    self.mu_s[g,i] *= (np.exp(self.groups[g] - self.groups[i])/(1 - self.alpha(A)))
-            
-            return sigma_s0 @ self.mu_s
+        g_min_vec = np.zeros_like(self.groups)
 
+        if A == 1: 
+            g_min_vec[:] = self.groups[-1]
+        else:
+            for g in range(self.groups.size):
+                g_min_vec[g] = self.group_bound(A,g)
+        
+        @njit(parallel=True)
+        def fill_mu_s(A,groups,alpha,g_min_vec):
+            mu_s = np.zeros((groups.size,groups.size))
+            for g in prange(groups.size):
+                for i in range(g, g_min_vec[g]):
+                    mu_s[g, i] = (((A + 1) * np.exp((groups[g] - groups[i]) / 2))
+                                   - ((A - 1) * np.exp((groups[i] - groups[g]) / 2))) / 2
+                    mu_s[g, i] *= (np.exp(groups[g] - groups[i]) / (1 - alpha))
+
+            return mu_s
+        
+        if l == 1: 
+            self.mu_s = fill_mu_s(A,self.groups,self.alpha(A),g_min_vec)
+            return sigma_s0 @ self.mu_s
 
         elif l == 2: mu = ((3 * self.mu_s ** 2 - 1) / 2)
 
@@ -185,21 +198,23 @@ class Sp3:
         4 matrices: Sn operator matrices
         """
         # Initialize I_vals and compute S_vals
+
+
         I_vals = [np.zeros_like(self.L0) for _ in range(4)]
         S_vals = self.calc_xs_l(sigma_s0, A)
-        
-        # Perform integration
         gridwidth = self.groups[1] - self.groups[0]
+        g_min_vec = np.zeros_like(self.groups)
+
+        if A == 1: 
+            g_min_vec[:] = self.groups[-1]
+        else:
+            for g in range(self.groups.size):
+                g_min_vec[g] = self.group_bound(A,g)
         
-        for i in range(self.groups.size):
-            g_min = self.group_bound(A,i)
-            for j in range(i, g_min):
-                g_bound = min(g_min, self.groups[-1])
-                factor = (g_bound - g_min) + (g_min - j)
-                
-                for idx in range(4):
-                    I_vals[idx][i, i] += S_vals[idx][i, j] * factor * gridwidth
-        
+
+        # Parallelize core computation
+        self._parallel_integrate(self.groups, A, S_vals, I_vals, gridwidth, g_min_vec)
+
         # Deallocate S_vals and return results
         self.deallocate([S_vals])
 
@@ -239,6 +254,7 @@ class Sp3:
         np.ndarray: Updated phi0 values.
         """
         t1 = time.time()
+        # compute the loss operators
         print("U-238")
         L_vals_U  = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
         print("H-1")
@@ -479,6 +495,14 @@ class Sp3:
     def jacobi_parallel(self,A, b, x0, eps=1e-6, max_iter=1000):
         """
         Jacobi iteration for parallel computing
+
+        Parameters:
+        A (matrix): matrix
+        b (vector): vector
+        x0 (vector): solution guess
+
+        Returns:
+        vector: solution
         """
         n = len(A)
         x = x0.copy()
@@ -542,19 +566,19 @@ class Sp3:
         x_new[i] = (b[i] - (row_sum - A[i, i] * x[i])) / A[i, i]  # Update x[i]
     
     @staticmethod
-    def SN_mat(sigma,gridwidth,divisor):
+    @njit(parallel=True)
+    def _parallel_integrate(groups, A, S_vals, I_vals, gridwidth, g_min_vec):
         """
-        calculate each parameter in the gtg scattering matrix
-
-        Parameters:
-        sigma (vector): lth order scattering xs
-        gridwidth (float): lethargy grid spacing
-        divisor (int): how many points exist between the lethargy grids
-
-        Returns:
-        float: scattering xs for group g' into group g
+        Helper function to perform the integration in parallel.
         """
-        return sigma * gridwidth[-1] / divisor
+        for i in prange(groups.size):
+            g_min = g_min_vec[i]
+            for j in range(i, g_min):
+                g_bound = min(g_min, groups[-1])
+                factor = (g_bound - g_min) + (g_min - j)
+
+                for idx in range(4):
+                    I_vals[idx][i, i] += S_vals[idx][i, j] * factor * gridwidth
 
     @staticmethod
     def _Ln(l,sigma,I): 
@@ -592,6 +616,15 @@ class Sp3:
 
     @staticmethod
     def deallocate(my_list):
+        """
+        Free up memory because large matrices
+
+        Parameters: 
+        my_list (list): a list of n parameters
+
+        Returns: 
+        None
+        """
         for obj in my_list:
             del obj 
         my_list.clear()  
