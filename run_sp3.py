@@ -15,14 +15,14 @@ print(f"Data Read, time = {np.round(time.time() - t_data,5)}s")
 # init class
 sp3 = Sp3(H,XS38,sigma_f,chi,B2)
 #print(f"Class initialized. Groups = {gridpoints}")
-#print("plotting sigma_t")
-#sp3.plot_xs_t()
+print("Plotting Sigma_t")
+sp3.plot_xs_t()
 #plt.show()
 
 # run
 st = time.time()
-sp3.run()
+sp3.run(properties,from_h5)
 et = time.time()
 
-print(f'Computation time = {np.round(et - st,5)} s')
+print(f'Computation time = {np.round(et - st,5)}s')
 

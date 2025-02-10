@@ -14,6 +14,8 @@ gridpoints = 5000
 B2 = 1
 NH = 5
 NU = 1
+properties = False # print operator properties
+from_h5 = False # load data from csvs
 
 #######################get data ##################################
 def get_data(data, gridpoints, N):
