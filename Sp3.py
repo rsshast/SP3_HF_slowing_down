@@ -4,6 +4,7 @@ import time
 import matplotlib.pyplot as plt
 import os
 import concurrent.futures
+import h5py
 from numba import njit, prange
 
 class Sp3:
@@ -19,7 +20,7 @@ class Sp3:
         """
         self.AH        = 1 # Atomic number of hydrogen
         self.AU        = 238 # Atomic number of U-238
-        self.E0        = 1e7 # maximum energy
+#        self.E0        = 1e7 # maximum energy
         self.sigma_t_H = xs_H[:, 1]
         self.sigma_s_H = xs_H[:, 2] # Hydrogen xs's
         self.sigma_t_U = xs_U[:, 1]
@@ -36,7 +37,6 @@ class Sp3:
         self.phi2 = None
         self.Phi0 = None
         self.Phi2 = None
-        self.Q    = None
         self.L0   = np.zeros((self.groups.size,self.groups.size))
         self.L1   = None
         self.L2   = None
@@ -59,12 +59,7 @@ class Sp3:
         Returns:
         int: Minimum group index for downscattering.
         """
-        if A == 1:
-            return self.groups.size
-        else: # assumes constant grid spacing
-            # when lethargy width is less than the gridwidth
-            t1 = self.groups[g] + np.log(1 / self.alpha(A))
-            return np.searchsorted(self.groups, t1)
+        return self.groups.size if A == 1 else np.searchsorted(self.groups, self.groups[g] +  np.log(1/self.alpha(A)))
 
     def xs_gtg(self,sigma_s0,A):
         """
@@ -159,9 +154,10 @@ class Sp3:
             self.mu_s = fill_mu_s(A,self.groups,self.alpha(A),g_min_vec)
             return sigma_s0 @ self.mu_s
 
-        elif l == 2: mu = ((3 * self.mu_s ** 2 - 1) / 2)
+        elif l == 2: mu = ((3 * np.linalg.matrix_power(self.mu_s,2) - 1) / 2)
 
-        elif l == 3: mu = ((5 * self.mu_s ** 3 - 3 * self.mu_s) / 2)
+        elif l == 3: 
+            mu = ((5 * np.linalg.matrix_power(self.mu_s,3) - 3 * self.mu_s) / 2)
 
         return sigma_s0 @ mu
 
@@ -181,8 +177,15 @@ class Sp3:
         S0 = sigma_s0
 
         # get the rest of the orders 
-        S_vals = [self.xs_sl(A,sigma_s0,l) for l in range(1,4)]
+        S_vals = [self.xs_sl(A,S0,l) for l in range(1,4)]
         S1, S2, S3 = S_vals
+        
+        # save gtg scattering xs's
+        my_str = "H" if A == 1 else "U"
+        np.savetxt(f"results/h5s/sigma_s0_{my_str}.csv", S0, delimiter=",")
+        np.savetxt(f"results/h5s/sigma_s1_{my_str}.csv", S1, delimiter=",")
+        np.savetxt(f"results/h5s/sigma_s2_{my_str}.csv", S2, delimiter=",")
+        np.savetxt(f"results/h5s/sigma_s3_{my_str}.csv", S3, delimiter=",")
 
         return S0, S1, S2, S3
 
@@ -198,8 +201,6 @@ class Sp3:
         4 matrices: Sn operator matrices
         """
         # Initialize I_vals and compute S_vals
-
-
         I_vals = [np.zeros_like(self.L0) for _ in range(4)]
         S_vals = self.calc_xs_l(sigma_s0, A)
         gridwidth = self.groups[1] - self.groups[0]
@@ -210,13 +211,12 @@ class Sp3:
         else:
             for g in range(self.groups.size):
                 g_min_vec[g] = self.group_bound(A,g)
-        
 
         # Parallelize core computation
-        self._parallel_integrate(self.groups, A, S_vals, I_vals, gridwidth, g_min_vec)
+        self.parallel_integrate(self.groups, A, S_vals, I_vals, gridwidth, g_min_vec)
 
         # Deallocate S_vals and return results
-        self.deallocate([S_vals])
+        self.deallocate([S_vals,g_min_vec])
 
         return I_vals
 
@@ -244,9 +244,12 @@ class Sp3:
         # loss operator corresponding to eqn 5
         L_vals = [self._Ln(n, sigma_t, I_vals[n]) for n in range(4)]
 
+        self.deallocate(I_vals)
+        self.deallocate([sigma_t])
+
         return L_vals
 
-    def calc_phi0(self):
+    def calc_phi0(self, properties):
         """
         Calculate the 0th scalar flux moment (phi0).
 
@@ -255,24 +258,29 @@ class Sp3:
         """
         t1 = time.time()
         # compute the loss operators
-        print("U-238")
+        print("U-238 Loss Operators")
         L_vals_U  = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
-        print("H-1")
+        print("H-1 Loss Operators")
         L_vals_H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
 
         self.L0 = L_vals_U[0] + L_vals_H[0]
         self.L1 = L_vals_U[1] + L_vals_H[1]
         self.L2 = L_vals_U[2] + L_vals_H[2]
         self.L3 = L_vals_U[3] + L_vals_H[3]
+
+        self.deallocate(L_vals_U)
+        self.deallocate(L_vals_H)
         
         print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
 
         # compute LHS and RHS
+        print("phi0 LHS")
         LHS = (9 * self.B2 ** 2 + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
                     + self.L3 @ self.L2 @ self.L1 @ self.L0)
+        print("phi0 RHS")
         RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
 
-        self.print_mat_properties(LHS)
+        if properties: self.print_mat_properties(LHS)
 
         # Ax = b
         self.phi0 = np.zeros_like(self.groups)
@@ -285,7 +293,7 @@ class Sp3:
 
         return self.phi0
 
-    def calc_phi2(self):
+    def calc_phi2(self, properties):
         '''
         calculate the 2nd scalar flux moment. Eq 28 in paper
         big matmul
@@ -297,7 +305,7 @@ class Sp3:
         LHS = self.L3 @ self.L2 # matrix
         RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
 
-        self.print_mat_properties(LHS)
+        if properties: self.print_mat_properties(LHS)
 
         # Ax = b
         self.phi2 = np.zeros_like(self.phi0)
@@ -306,8 +314,7 @@ class Sp3:
                             else np.linalg.solve(LHS,RHS))
 
         # deallocate
-        del LHS
-        del RHS
+        self.deallocate([LHS,RHS])
 
         return self.phi2
 
@@ -321,20 +328,26 @@ class Sp3:
         self.Phi2 = self.phi2
         self.Phi0 = self.phi0 + 2 * self.phi2
 
-    def fission_source(self):
+    def fission_source(self,A, sigma_f):
         """
         Calculates the Fission Source, Q
         Eq. 47
+        
+        Parameters: 
+        A (int): Atomic Number
+        sigma_f (vector): fission xs's
 
         Returns:
         vector: Fission Source
         """
-        for g in range(self.Q.size):
-            g_min = self.group_bound(self.AU,g)
-            self.Q[g] = (self.chi[g] * np.trapz(self.sigma_f[g:g_min].flatten() 
-                            * self.phi0[g:g_min].flatten(),self.groups[g:g_min]))
+        Q = np.zeros_like(self.phi0)
+        gridwidth = self.groups[1] - self.groups[0]
+        for i in range(self.phi0.size):
+            g_min = self.group_bound(A,i)
+            for j in range(i,g_min): Q[i] += sigma_f[j] * self.phi0[j] * np.exp(self.groups[i])
+            Q[i] *= (self.chi[i] * self.E[i])
 
-        return self.Q
+        return Q
 
     def plot_xs_t(self):
         # plot xs's for H and U vs E
@@ -372,33 +385,47 @@ class Sp3:
         plt.legend()
         plt.savefig(f'results/charts/phi2.png')
 
-    def diffusion_coef(self,A):
+    def diffusion_coef(self,A,n):
         """
         Calculates the diffusion coefficient for each group
+
+        Parameters:
+        A (int): Atomic Number
+        n (int): Flux Order (0 or 2)
 
         Returns:
         matrix: diffusion coef for each fine group (gxg)
         """
-        D0 = np.zeros((self.phi0.size,self.phi0.size))
-        D2 = np.zeros_like(D0)
+        D = np.zeros((self.phi0.size,self.phi0.size))
+        gridwidth = self.groups[1] - self.groups[0]
 
-        for i in range(D0.shape[0]):
+        if n == 0:
+            Linv = np.linalg.inv(self.L1)
+            Phi  = self.Phi0
+
+        else: 
+            Linv = np.linalg.inv(self.L3)
+            Phi  = self.Phi2
+
+        # operatre on Phi_n(u)
+        M = np.matmul(Linv,Phi)
+        for i in range(D.shape[0]): 
             g_min = self.group_bound(A,i)
-            for j in range(i,g_min):
-                L1 = self.L1[j:g_min,j:g_min]**(-1)
-                L3 = self.L3[j:g_min,j:g_min]**(-1)
-                D0[i,j] = np.trapz((L1 @ self.Phi0[j:g_min]).squeeze(),self.groups[j:g_min]) / np.trapz(self.Phi0[i:g_min],self.groups[i:g_min])
-                D2[i,j] = np.trapz((L3 @ self.Phi0[j:g_min]).squeeze(),self.groups[j:g_min]) / np.trapz(self.Phi0[i:g_min],self.groups[i:g_min])
-#                if D0[i,j] < self.tol and D2[i,j] < self.tol:
-#                    D0[i,j:] = 0.
-#                    D2[i,j:] = 0.
-#                    break
+            num = np.zeros((g_min - i))
 
-        Dn = [D0,D2]
+            # numerator integral
+            for j in range(i,g_min): 
+                num[i-j] += (M[j] * np.exp(self.groups[j]) * gridwidth)
 
-        return Dn
+            # accumulation matrix flipped
+            # not multiplying by self.E[i], it cancels out
+            num = np.flip(num)
+            # construct the diffusion coef matrix
+            D[i,i:g_min] = num / (np.sum(Phi[i:g_min] * gridwidth)) 
 
-    def sigma_update(self,A,sigma_x):
+        return D
+
+    def sigma_update(self,A,sigma_x,n):
         """
         Updates xs's for moment n and group g
         corresponds to eqns 52a) and 52c)
@@ -406,91 +433,151 @@ class Sp3:
         Parameters:
         A (int): Atomic Number
         sigma_x (vector): total or fission xs's.
+        n (int): moment
 
         Returns:
-        matrix: updated fission or total xs's for each moment (gx2)
+        vector: updated fission or total xs's for order l
         """
-        Phi0 = self.Phi0
-        Phi2 = self.Phi2
+        Phi = self.Phi0 if n == 0 else self.Phi2
+        sigma_new = np.zeros_like(Phi)
+        gridwidth = self.groups[1] - self.groups[0]
 
-        sigma_0_g = np.zeros_like(self.sigma_f)
-        sigma_2_g = np.zeros_like(self.sigma_f)
+        for i in range(Phi.size):
+            g_min = self.group_bound(A,i)
+            den = np.zeros((g_min - i))
+            for j in range(i,g_min):
+                # note: E0 cancels out in division
+                sigma_new[i] += sigma_x[j] * Phi[j] * np.exp(self.groups[i]) * gridwidth
+                # denominator in lethargy space
+                den[i-j]      = np.exp(self.groups[j]) * gridwidth
+            sigma_new[i] /= np.sum(Phi[i:g_min] * den)
 
-        for g in range(sigma_0_g.size):
-            g_min = self.group_bound(A,g)
-            sigma_0_g[g] = np.trapz(sigma_x[g:g_min].flatten() * Phi0[g:g_min],self.groups[g:g_min]) / np.trapz(Phi0[g:g_min])
-            sigma_2_g[g] = np.trapz(sigma_x[g:g_min].flatten() * Phi2[g:g_min],self.groups[g:g_min]) / np.trapz(Phi2[g:g_min])
+        return sigma_new
 
-        # write updated xs's as a list, return the list
-        sigma_g = np.column_stack((sigma_0_g,sigma_2_g))
-
-        return sigma_g
-
-    def sigma_s_update(self,A,sigma_s):
+    def sigma_s_update(self,A,l,n):
         """
         Updates gtg xs's for moment n
-        ASSUMES THAT WE HAVE VECTORS FOR EACH LEGENDRE MOMENT (4 FOR THEM)
 
         Parameters:
         A(int): Atomic Number
-        sigma_s: vector of P0 scattering xs's
+        l (int): scattering legendre moment
+        n (int): flux moment
 
         Returns:
-        3D matrix: updated g to g scattering xs's for each moment l
+        matrix: updated g to g scattering xs's for expansion l and moment n
         """
-        #FIXME
         # build xs library, sigma_sn
-        sigma_sn = np.zeros((self.phi0.size,self.phi0.size,4)) # only supported up to order 3!
+        sigma_s = np.zeros_like(self.L0)
+        Phi = self.Phi0 if n == 0 else self.Phi2
+        gridwidth = self.groups[1] - self.groups[0]
+        # read scattering xs's from csv
+        my_str = "H" if A == 1 else "U"
+        sigma_sl = pd.read_csv(f"results/h5s/sigma_s{n}_{my_str}.csv", header = None).to_numpy()
 
-        for i in range(sigma_s.shape[0]): # rows
+        # in integetral, E0 dependence cancels out
+        M = np.matmul(sigma_sl,Phi)
+        for i in range(Phi.size):
             g_min = self.group_bound(A,i)
-            for l in range(4):
-                xs_s = self.scat_order
-                for j in range(sigma_s.shape[1]): # columns
-                    den = np.trapz(Phi[i:g_min],self.groups[i:g_min])
-                    Eprime = np.trapz(xs_s[i:g_min]*Phi[i:g_min,None],self.groups[i:j],axis=0)
-                    num = np.trapz(Eprime[j:g_min],self.groups[j:g_min])
-                    sigma_sn[i,j,l] = num/den
+            num = np.zeros((g_min - i))
+            # integrate
+            for j in range(i,g_min):
+                num[i-j] += (M[j] * np.exp(self.groups[j]) * gridwidth)
+            num = np.flip(num)
+            den = np.sum(Phi[i:g_min] * gridwidth)
+            sigma_sl[i,i:g_min] = num/den
+                
+        return sigma_sl
 
-        return sigma_sn
-
-    def run(self):
+    def run(self, properties, from_h5):
         """
         Run the complete SP3 calculation process.
         """
-        print("Starting phi0 calculation...")
-        self.calc_phi0()
+        if from_h5:
+            print("Starting phi0 calculation...")
+            st = time.time()
+            self.calc_phi0(properties)
+            et = time.time()
+            print(f"phi0 calculation: {np.round(et-st,5)}")
 
-        print("Starting phi2 calculation...")
-        self.calc_phi2()
+            print("Starting phi2 calculation...")
+            self.calc_phi2(properties)
 
-        print("Starting Phi0 and Phi2 calculation...")
-        self.calc_Phi()
+            print("Plotting")
+            st = time.time()
+            self.plot_fluxes()
+            et = time.time()
+            print(f"Plotting Time: {np.round(et-st,5)}")
 
-        #print("New cross sections and Diffusion Coefs...")
-        # fission source Q
-        #Q = self.fission_source()
+            print("Starting Phi0 and Phi2 calculation...")
+            self.calc_Phi()
 
-        # generate diffusion coefs
-#        coefs_DU = self.diffusion_coef(self.AU)
-#        coefs_DH = self.diffusion_coef(self.AH)
-       
-        # group fission and total xs's for moments 0 and 2
-#        update_xs_t_H = self.sigma_update(self.AH,self.sigma_t_H) 
-#        update_xs_t_U = self.sigma_update(self.AU,self.sigma_t_U) 
-#        update_xs_f_U = self.sigma_update(self.AU,self.sigma_f) 
+            print("Saving Data...")
+            df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
+            df.to_hdf("results/h5s/fluxes.h5", key="df", mode="w", format="table")
+            with h5py.File("results/h5s/matrices.h5", "w") as f:
+                f.create_dataset("L0", data=self.L0)
+                f.create_dataset("L1", data=self.L1)
+                f.create_dataset("L2", data=self.L2)
+                f.create_dataset("L3", data=self.L3)
+            print("Data Saved")
 
-        #FIXME scattering...
-#        update_xs_s_H = self.sigma_s_update(self.AH,self.sigma_t_H)
-#        update_xs_s_U = self.sigma_s_update(self.AU,self.sigma_t_U)
-        
-        print("Calculation completed.\nSaving data and plotting...")
-        self.plot_fluxes()
-        df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
-        df.to_csv('results/csvs/fluxes.csv', index = False)
-        print("Data Saved")
-        
-        return df
+        else:
+            print("Reading Data From File...")
+            df = pd.read_hdf("results/h5s/fluxes.h5", key="df")
+            df = df.to_numpy() 
+            self.phi0, self.phi2, self.Phi0, self.Phi2 = df[:, 0], df[:, 1], df[:, 2], df[:, 3]
+            with h5py.File("results/h5s/matrices.h5", "r") as f:
+                self.L0 = f["L0"][:]
+                self.L1 = f["L1"][:]
+                self.L2 = f["L2"][:]
+                self.L3 = f["L3"][:]
+            print("Data Read!")
+
+
+        # Group fission and total cross-sections for moments 0 and 2
+        print("Calculating Fission Source and Updated Total / Fission Cross-Sections...")
+        st = time.time()
+        new_xs = {
+            "xs_t_H_0": self.sigma_update(self.AH, self.sigma_t_H, 0),
+            "xs_t_H_2": self.sigma_update(self.AH, self.sigma_t_H, 2),
+            "xs_t_U_0": self.sigma_update(self.AU, self.sigma_t_U, 0),
+            "xs_t_U_2": self.sigma_update(self.AU, self.sigma_t_U, 2),
+            "xs_f_U_0": self.sigma_update(self.AU, self.sigma_f, 0),
+            "xs_f_U_2": self.sigma_update(self.AU, self.sigma_f, 2),
+            "Q(E)"    : self.fission_source(self.AU,self.sigma_f),
+        }
+        print(f"Time XS Update: {np.round(time.time() - st, 5)}s")
+
+        # Save xs's to hdf5
+        with h5py.File("results/h5s/cross_sections.h5", "w") as f:
+            for key, value in new_xs.items():
+                f.create_dataset(key, data=value, compression="gzip")
+
+        # Generate diffusion coefficients
+        st = time.time()
+        print("Calculating Diffusion Coefficients for l = 0, l = 2...")
+        with h5py.File("results/h5s/diffusion_coefficients.h5", "w") as f:
+            for prefix, A in [("U", self.AU), ("H", self.AH)]:
+                for l in [0, 2]:
+                    D = self.diffusion_coef(A, l)
+                    f.create_dataset(f"D{prefix}_{l}", data=D, compression="gzip", compression_opts=9)
+        print(f"Time D Coef: {np.round(time.time() - st, 5)}s")
+
+        print("Calculting Updated Group to Group Scattering Cross-Sections...")
+        #new_xs_A_l_n
+        mat_indx = [self.AH,self.AU]
+        mat_name = ["H","U"]
+        indices = [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)]
+
+        st = time.time()
+        with h5py.File("results/h5s/new_cross_sections.h5", "w") as f:
+            for A, name in zip(mat_indx, mat_name):
+                for l, n in indices:
+                    xs = self.sigma_s_update(A, l, n)
+                    f.create_dataset(f"new_xs_{name}_{l}_{n}", data=xs, compression="gzip", compression_opts=9)
+        print(f"Time gtg XS Update: {np.round(time.time() - st, 5)}s")
+
+        print("Calculation completed.")
 
     def jacobi_parallel(self,A, b, x0, eps=1e-6, max_iter=1000):
         """
@@ -567,7 +654,7 @@ class Sp3:
     
     @staticmethod
     @njit(parallel=True)
-    def _parallel_integrate(groups, A, S_vals, I_vals, gridwidth, g_min_vec):
+    def parallel_integrate(groups, A, S_vals, I_vals, gridwidth, g_min_vec):
         """
         Helper function to perform the integration in parallel.
         """
