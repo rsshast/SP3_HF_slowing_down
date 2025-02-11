@@ -14,7 +14,7 @@ print(f"Data Read, time = {np.round(time.time() - t_data,5)}s")
 
 # init class
 sp3 = Sp3(H,XS38,sigma_f,chi,B2)
-#print(f"Class initialized. Groups = {gridpoints}")
+print(f"Class initialized. Groups = {gridpoints}")
 print("Plotting Sigma_t")
 sp3.plot_xs_t()
 #plt.show()

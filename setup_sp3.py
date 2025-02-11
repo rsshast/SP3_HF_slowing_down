@@ -9,12 +9,12 @@ import pandas as pd
 import os
 ####################################################################
 # user inputs
-E0 = 1e7 #this is set to ensure the first lethargy point is 0 for ease of physics comprehension
-gridpoints = 5000
+E0 = 1e7 
+gridpoints = 250
 B2 = 1
 NH = 5
 NU = 1
-properties = False # print operator properties
+properties = False 
 from_h5 = False # load data from csvs
 
 #######################get data ##################################
