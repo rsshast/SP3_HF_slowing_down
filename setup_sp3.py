@@ -9,14 +9,15 @@ import pandas as pd
 import os
 ####################################################################
 # user inputs
-E0 = 1e7 #this is set to ensure the first lethargy point is 0 for ease of physics comprehension
-gridpoints = 5000
-B2 = 1
+E0 = 1e7 
+gridpoints = 2000
+B2 = np.linspace(-1,1,21)
 NH = 5
 NU = 1
-properties = False # print operator properties
-from_h5 = False # load data from csvs
-
+# boolian variables for printing mat properties, generating fresh data, and doing a buckling study
+properties = False 
+from_h5 = False
+parametric_b2 = True
 #######################get data ##################################
 def get_data(data, gridpoints, N):
     data = data[(data[:, 0] <= E0) & (data[:, 0] >= 1)]  

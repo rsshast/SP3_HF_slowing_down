@@ -10,19 +10,29 @@ chi = get_data(chi,gridpoints,NU)
 H = get_data(H,gridpoints,NH)
 XS38 = get_data(XS38,gridpoints,NU)
 sigma_f = get_fission_data(XS38[:,0],sigma_f)
-print(f"Data Read, time = {np.round(time.time() - t_data,5)}s")
-
-# init class
-sp3 = Sp3(H,XS38,sigma_f,chi,B2)
-#print(f"Class initialized. Groups = {gridpoints}")
-print("Plotting Sigma_t")
-sp3.plot_xs_t()
-#plt.show()
-
-# run
-st = time.time()
-sp3.run(properties,from_h5)
-et = time.time()
-
-print(f'Computation time = {np.round(et - st,5)}s')
-
+foo = True
+if foo: 
+    groups = np.exp(XS38[:,0])
+else: 
+    print(f"Data Read, time = {np.round(time.time() - t_data,5)}s")
+    st = time.time()
+    if parametric_b2:
+        for i in range(B2.size):
+            # init class
+            sp3 = Sp3(H,XS38,sigma_f,chi,B2[i])
+            print(f"Class initialized. Groups = {gridpoints}, B2 = {np.round(B2[i],5)}")
+            sp3.run(properties,from_h5, parametric_b2)
+    
+    else:
+        sp3 = Sp3(H,XS38,sigma_f,chi,B2)
+        print(f"Class initialized. Groups = {gridpoints}")
+        #print("Plotting Sigma_t")
+        #sp3.plot_xs_t()
+        #plt.show()
+    
+        # run
+        st = time.time()
+        sp3.run(properties,from_h5, parametric_b2)
+    
+    et = time.time()
+    print(f'Computation time = {np.round(et - st,5)}s')

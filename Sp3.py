@@ -421,7 +421,8 @@ class Sp3:
             # not multiplying by self.E[i], it cancels out
             num = np.flip(num)
             # construct the diffusion coef matrix
-            D[i,i:g_min] = num / (np.sum(Phi[i:g_min] * gridwidth)) 
+            check = (np.sum(Phi[i:g_min] * gridwidth))
+            D[i,i:g_min] = num / (np.sum(Phi[i:g_min] * gridwidth)) if check > 0 else num 
 
         return D
 
@@ -450,7 +451,10 @@ class Sp3:
                 sigma_new[i] += sigma_x[j] * Phi[j] * np.exp(self.groups[i]) * gridwidth
                 # denominator in lethargy space
                 den[i-j]      = np.exp(self.groups[j]) * gridwidth
-            sigma_new[i] /= np.sum(Phi[i:g_min] * den)
+            #sigma_new[i] /= np.sum(Phi[i:g_min] * den) 
+            check = np.sum(Phi[i:g_min]*den)
+            if check != 0:
+                sigma_new[i] /= np.sum(Phi[i:g_min] * den) 
 
         return sigma_new
 
@@ -484,15 +488,15 @@ class Sp3:
                 num[i-j] += (M[j] * np.exp(self.groups[j]) * gridwidth)
             num = np.flip(num)
             den = np.sum(Phi[i:g_min] * gridwidth)
-            sigma_sl[i,i:g_min] = num/den
+            sigma_sl[i,i:g_min] = num/den if den > 0 else num
                 
         return sigma_sl
 
-    def run(self, properties, from_h5):
+    def run(self, properties, from_h5, parametric_b2):
         """
         Run the complete SP3 calculation process.
         """
-        if from_h5:
+        if from_h5 == False:
             print("Starting phi0 calculation...")
             st = time.time()
             self.calc_phi0(properties)
@@ -502,18 +506,18 @@ class Sp3:
             print("Starting phi2 calculation...")
             self.calc_phi2(properties)
 
-            print("Plotting")
-            st = time.time()
-            self.plot_fluxes()
-            et = time.time()
-            print(f"Plotting Time: {np.round(et-st,5)}")
+       #     print("Plotting")
+       #     st = time.time()
+        #    self.plot_fluxes()
+       #     et = time.time()
+       #     print(f"Plotting Time: {np.round(et-st,5)}")
 
             print("Starting Phi0 and Phi2 calculation...")
             self.calc_Phi()
 
             print("Saving Data...")
             df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
-            df.to_hdf("results/h5s/fluxes.h5", key="df", mode="w", format="table")
+            df.to_hdf(f"results/h5s/fluxes_{np.round(self.B2,5)}.h5", key="df", mode="w", format="table")
             with h5py.File("results/h5s/matrices.h5", "w") as f:
                 f.create_dataset("L0", data=self.L0)
                 f.create_dataset("L1", data=self.L1)
@@ -533,8 +537,8 @@ class Sp3:
                 self.L3 = f["L3"][:]
             print("Data Read!")
 
-
-        # Group fission and total cross-sections for moments 0 and 2
+        if parametric_b2: return 0
+            
         print("Calculating Fission Source and Updated Total / Fission Cross-Sections...")
         st = time.time()
         new_xs = {
