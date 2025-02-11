@@ -11,9 +11,9 @@ Then, calculate the fission source, create new flux weighted cross-sections (xs'
 Usage:
 
 setup.py contains:
-  energy group discritization and corresponding interpolated cross sections
-  Number Densities
-  Option to generate fresh data or load from .h5 files. 
+  * energy group discritization and corresponding interpolated cross sections
+  * Number Densities
+  * Option to generate fresh data or load from .h5 files. 
   
 Sp3.py Method contains:
   methods for calculating scattering and loss operators
