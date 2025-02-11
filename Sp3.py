@@ -20,7 +20,6 @@ class Sp3:
         """
         self.AH        = 1 # Atomic number of hydrogen
         self.AU        = 238 # Atomic number of U-238
-#        self.E0        = 1e7 # maximum energy
         self.sigma_t_H = xs_H[:, 1]
         self.sigma_s_H = xs_H[:, 2] # Hydrogen xs's
         self.sigma_t_U = xs_U[:, 1]
@@ -492,7 +491,7 @@ class Sp3:
         """
         Run the complete SP3 calculation process.
         """
-        if from_h5:
+        if from_h5 == False:
             print("Starting phi0 calculation...")
             st = time.time()
             self.calc_phi0(properties)
@@ -533,7 +532,6 @@ class Sp3:
                 self.L3 = f["L3"][:]
             print("Data Read!")
 
-
         # Group fission and total cross-sections for moments 0 and 2
         print("Calculating Fission Source and Updated Total / Fission Cross-Sections...")
         st = time.time()
@@ -563,11 +561,12 @@ class Sp3:
                     f.create_dataset(f"D{prefix}_{l}", data=D, compression="gzip", compression_opts=9)
         print(f"Time D Coef: {np.round(time.time() - st, 5)}s")
 
+        # generate gtg scattering xs's for all materials
         print("Calculting Updated Group to Group Scattering Cross-Sections...")
         #new_xs_A_l_n
         mat_indx = [self.AH,self.AU]
         mat_name = ["H","U"]
-        indices = [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)]
+        indices  = [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)]
 
         st = time.time()
         with h5py.File("results/h5s/new_cross_sections.h5", "w") as f:
