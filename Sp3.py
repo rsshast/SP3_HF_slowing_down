@@ -514,7 +514,7 @@ class Sp3:
             print("Saving Data...")
             df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
             df.to_hdf("results/h5s/fluxes.h5", key="df", mode="w", format="table")
-            with h5py.File("results/h5s/matrices.h5", "w") as f:
+            with h5py.File("results/h5s/Ln.h5", "w") as f:
                 f.create_dataset("L0", data=self.L0)
                 f.create_dataset("L1", data=self.L1)
                 f.create_dataset("L2", data=self.L2)
@@ -526,7 +526,7 @@ class Sp3:
             df = pd.read_hdf("results/h5s/fluxes.h5", key="df")
             df = df.to_numpy() 
             self.phi0, self.phi2, self.Phi0, self.Phi2 = df[:, 0], df[:, 1], df[:, 2], df[:, 3]
-            with h5py.File("results/h5s/matrices.h5", "r") as f:
+            with h5py.File("results/h5s/Ln.h5", "r") as f:
                 self.L0 = f["L0"][:]
                 self.L1 = f["L1"][:]
                 self.L2 = f["L2"][:]
@@ -570,7 +570,7 @@ class Sp3:
         indices  = [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)]
 
         st = time.time()
-        with h5py.File("results/h5s/new_cross_sections.h5", "w") as f:
+        with h5py.File("results/h5s/gtg_cross_sections.h5", "w") as f:
             for A, name in zip(mat_indx, mat_name):
                 for l, n in indices:
                     xs = self.sigma_s_update(A, l, n)
