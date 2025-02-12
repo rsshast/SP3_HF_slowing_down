@@ -181,10 +181,11 @@ class Sp3:
         
         # save gtg scattering xs's
         my_str = "H" if A == 1 else "U"
-        np.savetxt(f"results/h5s/sigma_s0_{my_str}.csv", S0, delimiter=",")
-        np.savetxt(f"results/h5s/sigma_s1_{my_str}.csv", S1, delimiter=",")
-        np.savetxt(f"results/h5s/sigma_s2_{my_str}.csv", S2, delimiter=",")
-        np.savetxt(f"results/h5s/sigma_s3_{my_str}.csv", S3, delimiter=",")
+        with h5py.File(f"results/h5s/sigma_s_{my_str}.h5", "w") as f:
+            f.create_dataset("sigma_s0", data=S0)
+            f.create_dataset("sigma_s1", data=S1)
+            f.create_dataset("sigma_s2", data=S2)
+            f.create_dataset("sigma_s3", data=S3)
 
         return S0, S1, S2, S3
 
@@ -469,9 +470,9 @@ class Sp3:
         sigma_s = np.zeros_like(self.L0)
         Phi = self.Phi0 if n == 0 else self.Phi2
         gridwidth = self.groups[1] - self.groups[0]
-        # read scattering xs's from csv
+        # read scattering xs's from .h5
         my_str = "H" if A == 1 else "U"
-        sigma_sl = pd.read_csv(f"results/h5s/sigma_s{n}_{my_str}.csv", header = None).to_numpy()
+        sigma_sl = self.read_sigma_s(l,A)
 
         # in integetral, E0 dependence cancels out
         M = np.matmul(sigma_sl,Phi)
@@ -699,6 +700,13 @@ class Sp3:
                 return False
 
         return True
+
+    @staticmethod
+    def read_sigma_s(l, A):
+        """Read only the S{l} dataset from the HDF5 file."""
+        my_str = "H" if A == 1 else "U"
+        with h5py.File(f"results/h5s/sigma_s_{my_str}.h5", "r") as f:
+            return np.array(f[f"sigma_s{l}"])  
 
     @staticmethod
     def deallocate(my_list):
