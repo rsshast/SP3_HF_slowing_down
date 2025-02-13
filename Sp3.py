@@ -1,11 +1,5 @@
-import numpy as np
-import pandas as pd
-import time
-import matplotlib.pyplot as plt
-import os
-import concurrent.futures
-import h5py
-from numba import njit, prange
+from __init__ import *
+from setup_sp3 import scratch_dir
 
 class Sp3:
     def __init__(self, xs_H, xs_U, sigma_f, chi, B2):
@@ -48,8 +42,8 @@ class Sp3:
         CONSTANT GRIDSPACING
         For Hydrogen, lim alpha -> 0 1/alpha = \inf, therefore no top lethargy bound
         For heavier isotopes (Uranium) we have 2 cases (no clipping):
-        Take the minimum of (u + ln (1/alpha)) and gridwidth of lethargy grid 
-        you can pass a function in here instead of the value. 
+        Take the minimum of (u + ln (1/alpha)) and gridwidth of lethargy grid
+        you can pass a function in here instead of the value.
 
         Parameters:
         A (int): Atomic Number:
@@ -114,7 +108,6 @@ class Sp3:
                 sigma_gtg[g, :] *= sigma_s0[g] / row_sums[g]
 
         return sigma_gtg
-
 
     def xs_sl(self,A,sigma_s0,l):
         """
@@ -181,7 +174,7 @@ class Sp3:
         
         # save gtg scattering xs's
         my_str = "H" if A == 1 else "U"
-        with h5py.File(f"results/h5s/sigma_s_{my_str}.h5", "w") as f:
+        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "w") as f:
             f.create_dataset("sigma_s0", data=S0)
             f.create_dataset("sigma_s1", data=S1)
             f.create_dataset("sigma_s2", data=S2)
@@ -254,22 +247,29 @@ class Sp3:
         Calculate the 0th scalar flux moment (phi0).
 
         Returns:
-        np.ndarray: Updated phi0 values.
+        vector: phi0.
         """
         t1 = time.time()
         # compute the loss operators
         print("U-238 Loss Operators")
         L_vals_U  = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
+        # send to csr to save memory
+        L_U_sparse = [csr_matrix(matrix) for matrix in L_vals_U]
         print("H-1 Loss Operators")
         L_vals_H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
+        # send to csr to save memory
+        L_H_sparse = [csr_matrix(matrix) for matrix in L_vals_H]
 
-        self.L0 = L_vals_U[0] + L_vals_H[0]
-        self.L1 = L_vals_U[1] + L_vals_H[1]
-        self.L2 = L_vals_U[2] + L_vals_H[2]
-        self.L3 = L_vals_U[3] + L_vals_H[3]
+        # do sum on csr
+        sparse_sum = [L_U_sparse[i] + L_H_sparse[i] for i in range(len(L_U_sparse))]
+        # reconstruct the full matrix
+        self.L0, self.L1, self.L2, self.L3 = [matrix.toarray() for matrix in sparse_sum]
 
+        # deallocate unnecessary memory
         self.deallocate(L_vals_U)
         self.deallocate(L_vals_H)
+        self.deallocate(L_U_sparse)
+        self.deallocate(L_H_sparse)
         
         print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
 
@@ -400,11 +400,11 @@ class Sp3:
         gridwidth = self.groups[1] - self.groups[0]
 
         if n == 0:
-            Linv = np.linalg.inv(self.L1)
+            Linv = sp.linalg.inv(self.L1)
             Phi  = self.Phi0
 
         else: 
-            Linv = np.linalg.inv(self.L3)
+            Linv = sp.linalg.inv(self.L3)
             Phi  = self.Phi2
 
         # operatre on Phi_n(u)
@@ -513,8 +513,8 @@ class Sp3:
 
             print("Saving Data...")
             df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
-            df.to_hdf("results/h5s/fluxes.h5", key="df", mode="w", format="table")
-            with h5py.File("results/h5s/Ln.h5", "w") as f:
+            df.to_hdf(f"{scratch_dir}/fluxes.h5", key="df", mode="w", format="table")
+            with h5py.File(f"{scratch_dir}/Ln.h5", "w") as f:
                 f.create_dataset("L0", data=self.L0)
                 f.create_dataset("L1", data=self.L1)
                 f.create_dataset("L2", data=self.L2)
@@ -523,10 +523,10 @@ class Sp3:
 
         else:
             print("Reading Data From File...")
-            df = pd.read_hdf("results/h5s/fluxes.h5", key="df")
+            df = pd.read_hdf(f"{scratch_dir}/fluxes.h5", key="df")
             df = df.to_numpy() 
             self.phi0, self.phi2, self.Phi0, self.Phi2 = df[:, 0], df[:, 1], df[:, 2], df[:, 3]
-            with h5py.File("results/h5s/Ln.h5", "r") as f:
+            with h5py.File(f"{scratch_dir}/Ln.h5", "r") as f:
                 self.L0 = f["L0"][:]
                 self.L1 = f["L1"][:]
                 self.L2 = f["L2"][:]
@@ -548,14 +548,14 @@ class Sp3:
         print(f"Time XS Update: {np.round(time.time() - st, 5)}s")
 
         # Save xs's to hdf5
-        with h5py.File("results/h5s/cross_sections.h5", "w") as f:
+        with h5py.File(f"{scratch_dir}/cross_sections.h5", "w") as f:
             for key, value in new_xs.items():
                 f.create_dataset(key, data=value, compression="gzip")
 
         # Generate diffusion coefficients
         st = time.time()
         print("Calculating Diffusion Coefficients for l = 0, l = 2...")
-        with h5py.File("results/h5s/diffusion_coefficients.h5", "w") as f:
+        with h5py.File(f"{scratch_dir}/diffusion_coefficients.h5", "w") as f:
             for prefix, A in [("U", self.AU), ("H", self.AH)]:
                 for l in [0, 2]:
                     D = self.diffusion_coef(A, l)
@@ -570,7 +570,7 @@ class Sp3:
         indices  = [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)]
 
         st = time.time()
-        with h5py.File("results/h5s/gtg_cross_sections.h5", "w") as f:
+        with h5py.File(f"{scratch_dir}/gtg_cross_sections.h5", "w") as f:
             for A, name in zip(mat_indx, mat_name):
                 for l, n in indices:
                     xs = self.sigma_s_update(A, l, n)
@@ -705,7 +705,7 @@ class Sp3:
     def read_sigma_s(l, A):
         """Read only the S{l} dataset from the HDF5 file."""
         my_str = "H" if A == 1 else "U"
-        with h5py.File(f"results/h5s/sigma_s_{my_str}.h5", "r") as f:
+        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "r") as f:
             return np.array(f[f"sigma_s{l}"])  
 
     @staticmethod
@@ -722,3 +722,74 @@ class Sp3:
         for obj in my_list:
             del obj 
         my_list.clear()  
+
+    @staticmethod
+    def den_to_csr(A):
+        """
+        convert a dense matrix to csr format
+
+        Parameters:
+        A (matrix): matrix in dense format
+
+        Returns (triplet):
+        vector: values
+        vector: column indices
+        vector: row pointer
+        """
+        # init
+        vals = []
+        col_ind = []
+        row_ptr = []
+
+        for row in A:
+            for col, val in enumerate(row):
+                if val != 0:
+                    vals.append(val)
+                    col_ind.append(col)
+            row_ptr.append(len(vals))
+
+        return np.array(vals), np.array(col_ind), np.array(row_ptr)
+
+#    @staticmethod
+#    def np_to_tl(A):
+#        core, factors = tucker(A, rank=[n//2 for n in A.shape])
+#        print(core.nbytes)
+#        reconstructed = tucker_to_tensor((core, factors))
+#        error = np.linalg.norm(A - reconstructed) / np.linalg.norm(A)
+#        print(f"Reconstruction error: {error:.4f}")
+#        return tl.tensor(A)
+#
+#    @staticmethod
+#    def tl_to_np(A):
+#        return tl.to_numpy(A)
+#
+#    @staticmethod
+#    def find_rank(A):
+#        ranks = range(1, 10)
+#
+#        for r in ranks:
+#            factors = parafac(A, rank=r)
+#            reconstructed = tl.cp_to_tensor(factors)
+#            error = np.linalg.norm(A - reconstructed) / np.linalg.norm(A)
+#            if error < .05: return r
+#            
+#
+#        # Plot the error curve to find the "elbow" point
+#        #import matplotlib.pyplot as plt
+#        #plt.plot(ranks, errors, marker="o")
+#        #plt.xlabel("Rank")
+#        #plt.ylabel("Reconstruction Error")
+#        #plt.title("Choosing Best Rank for CP Decomposition")
+#        #plt.show()
+#
+#    @staticmethod
+#    def estimate_tucker_rank(tensor, energy_threshold):
+#        """ Estimate Tucker ranks based on SVD energy retention. """
+#        ranks = []
+#        for mode in range(tl.ndim(tensor)):
+#            unfolding = tl.unfold(tensor, mode)  # Unfold tensor along mode
+#            singular_values = svd(unfolding, compute_uv=False)  # SVD on mode matrix
+#            total_energy = np.cumsum(singular_values**2) / np.sum(singular_values**2)
+#            rank = np.searchsorted(total_energy, energy_threshold) + 1  # Find where energy exceeds threshold
+#            ranks.append(rank)
+#        return ranks
