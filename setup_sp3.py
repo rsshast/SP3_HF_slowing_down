@@ -1,22 +1,14 @@
-'''
-setup.py
-'''
-###################################################################
-# basic imports
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import os
+from __init__ import *
 ####################################################################
 # user inputs
 E0 = 1e7 
-gridpoints = 250
-B2 = 1
+gridpoints = 20000
+B2 = .01
 NH = 5
 NU = 1
-properties = False 
-from_h5 = False # load data from csvs
-
+properties = False # if true, print matrix properties
+from_h5 = False # if true, load data from h5 files
+scratch_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/h5s"
 #######################get data ##################################
 def get_data(data, gridpoints, N):
     data = data[(data[:, 0] <= E0) & (data[:, 0] >= 1)]  
@@ -42,7 +34,7 @@ AO = 16
 alphaU = ((AU-1)/(AU+1))**2 
 alphaO = ((AO-1)/(AO+1))**2
 ###
-data_dir = '~/WN25/SP3/data/'
+data_dir = 'data/'
 chi35 = pd.read_csv(f'{data_dir}chi_u235.txt', sep = '\t',header = 0)
 H1 = pd.read_csv(f'{data_dir}xs_h1_T293k.txt', sep  = '\t', header = 0)
 U238 = pd.read_csv(f'{data_dir}xs_u238_T293k.txt',sep  = '\t', header = 0)

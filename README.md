@@ -10,6 +10,9 @@ Then, calculate the fission source, create new flux weighted cross-sections (xs'
 
 Usage:
 
+__init__.py contains:
+  * Modules required to run the code
+
 setup.py contains:
   * energy group discritization and corresponding interpolated cross sections
   * Number Densities
