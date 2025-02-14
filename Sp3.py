@@ -194,7 +194,7 @@ class Sp3:
         4 matrices: Sn operator matrices
         """
         # Initialize I_vals and compute S_vals
-        I_vals = [np.zeros_like(self.L0) for _ in range(4)]
+        I_vals = [np.zeros_like(self.groups) for _ in range(4)]
         S_vals = self.calc_xs_l(sigma_s0, A)
         gridwidth = self.groups[1] - self.groups[0]
         g_min_vec = np.zeros_like(self.groups)
@@ -206,7 +206,7 @@ class Sp3:
                 g_min_vec[g] = self.group_bound(A,g)
 
         # Parallelize core computation
-        self.parallel_integrate(self.groups, A, S_vals, I_vals, gridwidth, g_min_vec)
+        self.parallel_integrate(self.groups, S_vals, I_vals, gridwidth, g_min_vec)
 
         # Deallocate S_vals and return results
         self.deallocate([S_vals,g_min_vec])
@@ -229,7 +229,7 @@ class Sp3:
         double integral. first one over u can be done explicitly, second one over u' must be done numerically
         """
         # build gtg xs libraries
-        sigma_t = np.diag(sigma_t) # diagonal of the total xs's
+#        sigma_t = np.diag(sigma_t) # diagonal of the total xs's
 
         # integration matrix corresponding to eqn 4
         I_vals = self.integrate_Sn(sigma_s,A)
@@ -360,7 +360,7 @@ class Sp3:
         plt.yscale("log")
         plt.xscale("log")
         plt.legend()
-        plt.grid(True)
+        plt.grid(True, which='both')
         plt.savefig(f"results/charts/xs_t_{self.groups.size}.png")
 
     def plot_fluxes(self):
@@ -371,7 +371,7 @@ class Sp3:
         plt.xlabel('E')
         plt.ylabel(r'$\phi_0$')
         plt.xscale('log')
-        plt.grid(True)
+        plt.grid(True, which='both')
         plt.legend()
         plt.savefig(f'results/charts/phi0.png')
 
@@ -381,7 +381,7 @@ class Sp3:
         plt.xlabel('E')
         plt.ylabel(r'$\phi$')
         plt.xscale('log')
-        plt.grid(True)
+        plt.grid(True, which='both')
         plt.legend()
         plt.savefig(f'results/charts/phi2.png')
 
@@ -407,22 +407,37 @@ class Sp3:
             Linv = sp.linalg.inv(self.L3)
             Phi  = self.Phi2
 
-        # operatre on Phi_n(u)
+        # operator on Phi_n(u)
         M = np.matmul(Linv,Phi)
-        for i in range(D.shape[0]): 
-            g_min = self.group_bound(A,i)
-            num = np.zeros((g_min - i))
 
-            # numerator integral
-            for j in range(i,g_min): 
-                num[i-j] += (M[j] * np.exp(self.groups[j]) * gridwidth)
+        g_min_vec = np.zeros_like(self.groups)
+        if A == 1:
+            g_min_vec[:] = (self.groups.size)
+        else:
+            for g in range(self.groups.size):
+                g_min_vec[g] = self.group_bound(A,g)
 
-            # accumulation matrix flipped
-            # not multiplying by self.E[i], it cancels out
-            num = np.flip(num)
-            # construct the diffusion coef matrix
-            D[i,i:g_min] = num / (np.sum(Phi[i:g_min] * gridwidth)) 
+        @staticmethod
+        @njit(parallel=True)
+        def parallel_coef_d(D,g_min_vec,M,groups,gridwidth,Phi):
+            for i in prange(D.shape[0]): 
+                g_min = int(g_min_vec[i])
+                num = np.zeros((g_min - i))
 
+                # numerator integral
+                for j in range(i,g_min): 
+                    num[i-j] += (M[j] * np.exp(groups[j]) * gridwidth)
+
+                # accumulation matrix flipped
+                # not multiplying by self.E[i], it cancels out
+                num = np.flip(num)
+                # construct the diffusion coef matrix
+                D[i,i:g_min] = num / (np.sum(Phi[i:g_min] * gridwidth)) 
+            
+            return D
+
+        D = parallel_coef_d(D,g_min_vec,M,self.groups,gridwidth,Phi)
+    
         return D
 
     def sigma_update(self,A,sigma_x,n):
@@ -442,15 +457,29 @@ class Sp3:
         sigma_new = np.zeros_like(Phi)
         gridwidth = self.groups[1] - self.groups[0]
 
-        for i in range(Phi.size):
-            g_min = self.group_bound(A,i)
-            den = np.zeros((g_min - i))
-            for j in range(i,g_min):
-                # note: E0 cancels out in division
-                sigma_new[i] += sigma_x[j] * Phi[j] * np.exp(self.groups[i]) * gridwidth
-                # denominator in lethargy space
-                den[i-j]      = np.exp(self.groups[j]) * gridwidth
-            sigma_new[i] /= np.sum(Phi[i:g_min] * den)
+        g_min_vec = np.zeros_like(self.groups)
+        if A == 1:
+            g_min_vec[:] = (self.groups.size)
+        else:
+            for g in range(self.groups.size):
+                g_min_vec[g] = self.group_bound(A,g)
+
+        @staticmethod
+        @njit(parallel=True)
+        def parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,groups,gridwidth):
+            for i in prange(Phi.size):
+                g_min = int(g_min_vec[i])
+                den = np.zeros((g_min - i))
+                for j in range(i,g_min):
+                    # note: E0 cancels out in division
+                    sigma_new[i] += sigma_x[j] * Phi[j] * np.exp(groups[i]) * gridwidth
+                    # denominator in lethargy space
+                    den[i-j]      = np.exp(groups[j]) * gridwidth
+                sigma_new[i] /= np.sum(Phi[i:g_min] * den)
+
+            return sigma_new
+
+        sigma_new = parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,self.groups,gridwidth)
 
         return sigma_new
 
@@ -474,18 +503,33 @@ class Sp3:
         my_str = "H" if A == 1 else "U"
         sigma_sl = self.read_sigma_s(l,A)
 
+        g_min_vec = np.zeros_like(self.groups)
+        if A == 1:
+            g_min_vec[:] = (self.groups.size)
+        else:
+            for g in range(self.groups.size):
+                g_min_vec[g] = self.group_bound(A,g)
+
         # in integetral, E0 dependence cancels out
         M = np.matmul(sigma_sl,Phi)
-        for i in range(Phi.size):
-            g_min = self.group_bound(A,i)
-            num = np.zeros((g_min - i))
-            # integrate
-            for j in range(i,g_min):
-                num[i-j] += (M[j] * np.exp(self.groups[j]) * gridwidth)
-            num = np.flip(num)
-            den = np.sum(Phi[i:g_min] * gridwidth)
-            sigma_sl[i,i:g_min] = num/den
+
+        @staticmethod
+        @njit(parallel=True)
+        def parallel_sigma_s_upd(Phi,g_min_vec,M,groups,gridwidth,sigma_sl):
+            for i in prange(Phi.size):
+                g_min = int(g_min_vec[i])
+                num = np.zeros((g_min - i))
+                # integrate
+                for j in range(i,g_min):
+                    num[i-j] += (M[j] * np.exp(groups[j]) * gridwidth)
+                num = np.flip(num)
+                den = np.sum(Phi[i:g_min] * gridwidth)
+                sigma_sl[i,i:g_min] = num/den
                 
+            return sigma_sl
+
+        sigma_sl = parallel_sigma_s_upd(Phi,g_min_vec,M,self.groups,gridwidth,sigma_sl)
+
         return sigma_sl
 
     def run(self, properties, from_h5):
@@ -654,18 +698,18 @@ class Sp3:
     
     @staticmethod
     @njit(parallel=True)
-    def parallel_integrate(groups, A, S_vals, I_vals, gridwidth, g_min_vec):
+    def parallel_integrate(groups, S_vals, I_vals, gridwidth, g_min_vec):
         """
         Helper function to perform the integration in parallel.
         """
         for i in prange(groups.size):
             g_min = g_min_vec[i]
-            for j in range(i, g_min):
+            for j in range(i, g_min, -1):
                 g_bound = min(g_min, groups[-1])
                 factor = (g_bound - g_min) + (g_min - j)
 
                 for idx in range(4):
-                    I_vals[idx][i, i] += S_vals[idx][i, j] * factor * gridwidth
+                    I_vals[idx][i] += S_vals[idx][i, j] * factor * gridwidth
 
     @staticmethod
     def _Ln(l,sigma,I): 
@@ -680,7 +724,7 @@ class Sp3:
         Returns: 
         matrix: Loss operator for order l
         """
-        return (2 * l + 1) * (sigma - I)
+        return np.diag((2 * l + 1) * (sigma - I))
 
     @staticmethod
     def is_diagonally_dominant(A):

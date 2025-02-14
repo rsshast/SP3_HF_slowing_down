@@ -2,11 +2,11 @@ from __init__ import *
 ####################################################################
 # user inputs
 E0 = 1e7 
-gridpoints = 20000
+gridpoints = 10000
 B2 = .01
 NH = 5
 NU = 1
-properties = False # if true, print matrix properties
+properties = True # if true, print matrix properties
 from_h5 = False # if true, load data from h5 files
 scratch_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/h5s"
 #######################get data ##################################
