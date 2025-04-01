@@ -89,7 +89,7 @@ def calc_phi(gridSpace,H,XS38,NP,sigma_b2,deltaU,alphaU,counter,f,h,chi,alphaP,o
     print(f"time to calculate the slowing down spectrum: {et-st:.4f} seconds")
     return phi
 
-def self_shielding_tables(H,XS38,gridSpace,alphaU,Ewims,NH,sigma_p_H,deltaU,chi,E):
+def self_shielding_tables(H,XS38,gridSpace,alphaU,Ewims,NH,sigma_p_H,deltaU,chi,E,alphaP):
     st = time.time()
     #data remanipulation
     sigma_a_H = H[:,1] - H[:,2]
@@ -120,19 +120,20 @@ def self_shielding_tables(H,XS38,gridSpace,alphaU,Ewims,NH,sigma_p_H,deltaU,chi,
         H *= NH #multiply the xs's by this new number density.
         #recalculate phi, like done in question 1
         phi=np.zeros_like(XS38[:,0])
-        phi = calc_phi(gridSpace,H,XS38,deltaU,alphaU,phi,counter,f,chi)
+        oxy=False
+        sigma_b2 = 0
+        phi = (gridSpace,H,XS38,NH,sigma_b2,deltaU,alphaU,counter,f,h,chi,alphaP,oxy)
+#        phi = calc_phi(gridSpace,H,XS38,deltaU,alphaU,phi,counter,f,chi)
         #sanity check
-        '''
-        if k == 0:
+        if NH == 5:
             plt.plot(E,phi)
             plt.xscale('log')
             plt.xlabel('Energy (eV)')
             plt.ylabel('scalar flux')
             plt.title(f'Flux check, NH = {NH}')
             plt.grid(True,which ='both')
-            plt.savefig('charts/flux_check_q2.png')
+            plt.savefig(f'charts/flux_check_q2_{NH}.png')
             plt.close()
-        '''
         #obtain group xs's given fluxes
         for j in range(1,len(Ewims)):
             #find bins between each energy in the wims file

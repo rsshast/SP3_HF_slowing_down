@@ -14,15 +14,16 @@ NP = 0
 #set where scattering needs to be subtracted off, and grid size
 h,f,counter = set_width(gridSpace,alphaU)
 # calculate the slowing down spectrum
-phi = calc_phi(gridSpace,H,XS38,NP,sigma_b2,deltaU,alphaU,counter,f,h,chi,alphaP,oxy=False)
-if (q1plot == True): plots(E,phi)
-print('end q1')
+#phi = calc_phi(gridSpace,H,XS38,NP,sigma_b2,deltaU,alphaU,counter,f,h,chi,alphaP,oxy=False)
+#if (q1plot == True): plots(E,phi)
+#print('end q1')
 #df = pd.DataFrame({'E':E,'phi':phi})
 #df.to_csv('hw2q1_phivsE.csv')
 #
 #construct self shielding tables and save to csv
-#self_shielding_tables(H,XS38,gridSpace,alphaU,Ewims,NH,sigma_p_H,deltaU,chi,E)
+self_shielding_tables(H,XS38,gridSpace,alphaU,Ewims,NH,sigma_p_H,deltaU,chi,E,alphaP)
 print('end q2')
+assert 0 == 1
 
 ######################################################
 '''

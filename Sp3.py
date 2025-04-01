@@ -1,5 +1,4 @@
 from __init__ import *
-from setup_sp3 import scratch_dir
 
 class Sp3:
     def __init__(self, xs_H, xs_U, sigma_f, chi, B2):
@@ -12,38 +11,87 @@ class Sp3:
         chi (array): Fission spectrum matrix. Column 0: groups, Column 1: chi values.
         B2 (float): Buckling value.
         """
+        np.set_printoptions(precision=4, suppress=True)
         self.AH        = 1 # Atomic number of hydrogen
         self.AU        = 238 # Atomic number of U-238
-        self.sigma_t_H = xs_H[:, 1]
-        self.sigma_s_H = xs_H[:, 2] # Hydrogen xs's
-        self.sigma_t_U = xs_U[:, 1]
-        self.sigma_s_U = xs_U[:, 2] # U-238 xs's
-        self.sigma_f   = sigma_f # fission xs's
-        self.E         = np.exp(xs_U[:,0]) # energy groups
-        self.chi       = chi[:, 1] # fission spectrum
-        self.groups    = xs_U[:,0] # energy groups
+        self.E0        = 1e7
+        self.sigma_t_H = np.flip(xs_H[:, 1])
+        self.sigma_s_H = np.flip(xs_H[:, 2]) # Hydrogen xs's
+        self.sigma_t_U = np.flip(xs_U[:, 1])
+        self.sigma_s_U = np.flip(xs_U[:, 2]) # U-238 xs's
+        self.sigma_f   = np.flip(sigma_f) # fission xs's
+        self.E         = np.exp(xs_U[:,0]) # energy groups, low to high
+        self.chi       = np.flip(chi[:, 1]) # fission spectrum
+        self.groups    = xs_U[:,0] # lethargy groups, low leth to high leth
         self.B2        = B2 # geometric buckling
         self.tol       = 1e-6 # Small value threshold
+        self.gridspace = self.groups[1] - self.groups[0]
+        self.leg_order = 4
 
         # Initialize other attributes
-        self.phi0 = None
-        self.phi2 = None
-        self.Phi0 = None
-        self.Phi2 = None
         self.L0   = np.zeros((self.groups.size,self.groups.size))
         self.L1   = None
         self.L2   = None
         self.L3   = None
-        self.mu_s = None
+        self.phi0 = None
+        self.phi2 = None
+        self.Phi0 = None
+        self.Phi2 = None
+        self.p0   = None
 
+    def initial_flux(self):
+        """
+        calculate the initial flux as shown in Nuclear Engineering handbook
+
+        Returns:
+        vector: phi, initial s0 fluxes used to construct the gtg scattering xs's
+        """
+        scatH = 0
+        scatU = 0
+        alpha = self.alpha(self.AU)
+        phi = np.zeros_like(self.groups)
+        g_min = self.group_bound(self.AU,0)
+
+        sigma_th = (self.sigma_t_H)
+        sigma_tu = (self.sigma_t_U)
+        sigma_sh = (self.sigma_s_H)
+        sigma_su = (self.sigma_s_U)
+        chi = (self.chi)
+
+        @staticmethod
+        def scat_source(sigma,phi,E,gridspace,i,alpha):
+            return sigma[i-1] / (1 - alpha) * phi[i-1] * E[i-1] * gridspace
+
+        for i in range(0, self.groups.size):
+            #removal xs
+            Sigma_R = (sigma_th[i] + sigma_tu[i] - 
+                        self.gridspace * (sigma_su[i] / (1 - alpha)) 
+                            - self.gridspace * sigma_sh[i])
+
+            if i == 0:
+                phi[i] = chi[i]/Sigma_R
+
+            else:
+                #Scattering Source for Hydrogen
+                scatH += scat_source(sigma_sh,phi,self.E,self.gridspace,i,alpha = 0)
+    
+                #Scattering Source for Uranium
+                scatU += scat_source(sigma_su,phi,self.E,self.gridspace,i,alpha = alpha)
+
+                #subtract off the contribution from lesser lethargy bins
+                if i > g_min:
+                    h = i - g_min
+                    scatU -= (sigma_su[h]   / (1 - alpha) * phi[h] 
+                                * self.E[h]   * self.gridspace)
+
+                #append to the vector
+                phi[i] = (chi[i] + np.exp(-1 * self.groups[i]) * (scatH + scatU)) / Sigma_R
+
+        self.p0 = phi
+        
     def group_bound(self, A, g):
         """
         Calculate the minimum group a neutron can downscatter to.
-        CONSTANT GRIDSPACING
-        For Hydrogen, lim alpha -> 0 1/alpha = \inf, therefore no top lethargy bound
-        For heavier isotopes (Uranium) we have 2 cases (no clipping):
-        Take the minimum of (u + ln (1/alpha)) and gridwidth of lethargy grid
-        you can pass a function in here instead of the value.
 
         Parameters:
         A (int): Atomic Number:
@@ -52,108 +100,101 @@ class Sp3:
         Returns:
         int: Minimum group index for downscattering.
         """
-        return self.groups.size if A == 1 else np.searchsorted(self.groups, self.groups[g] +  np.log(1/self.alpha(A)))
+        return (self.groups.size if A == 1 
+                else np.searchsorted(self.groups, self.groups[g] + np.log(1 / self.alpha(A))))
 
-    def xs_gtg(self,sigma_s0,A):
+    def compute_scattering(self, g, gp, sigma_s, A, l, mu):
         """
-        find the gtg scattering matrix for s0
-
-        Parameters: 
-        sigma_s0 (vector): l = 0 group xs's
-        A (int): Mass Ratio
-
-        returns:
-        matrix: gtg xs's for l = 0
-        """
-        # Initialize
-        sigma_gtg = np.zeros_like(self.L0)
-
-        # Incident lethargy
-        for g in range(self.groups.size):
-            u_low = self.groups[g]
-            u_high = self.group_bound(A,g)
-            xs_s = sigma_s0[g]
-
-            # Compute fractional contributions for scattering
-            fractions = np.zeros(self.groups.size)  # Initialize array to match the size of sigma
-            total_fraction = 0.0
-
-            # Outgoing lethargy groups obeying scattering ranges (upper triangular)
-            for gg in range(g, min(u_high, self.groups.size)):  # Scattering to higher lethargy
-                u_target_low = self.groups[gg]
-                u_target_high = self.group_bound(A, gg)
-
-                # Lethargy bin overlap
-                overlap = max(0, min(u_high, u_target_high) - max(u_low, u_target_low))
-                fraction = overlap / (u_high - u_low) if (u_high - u_low) > 0 else 0
-
-                # Append fraction for the target group
-                fractions[gg] = fraction
-                total_fraction += fraction
-
-                # Exit early if the fraction is very small (for efficiency)
-                if fraction < self.tol: break
-
-            # Normalize contributions: normalize each group so total fraction sums to 1
-            if total_fraction > 0:
-                fractions /= total_fraction
-
-            # Build matrix (only upper triangle)
-            sigma_gtg[g, :] = xs_s * fractions
-
-        # Normalize each row to sigma[g]
-        row_sums = np.sum(sigma_gtg, axis=1)
-        for g in range(self.groups.size):
-            if row_sums[g] > 0:
-                sigma_gtg[g, :] *= sigma_s0[g] / row_sums[g]
-
-        return sigma_gtg
-
-    def xs_sl(self,A,sigma_s0,l):
-        """
-        Calculate the lth moment scattering xs for a given material for a given group
-        Now works in parallel
+        Finds the g' -> g xs for moment l
 
         Parameters:
-        A (int): Atomic Mass Ratio
-        g (int): incident group
-        sigma_s (matrix): 0th moment scattering xs for a given material
+        g (int): incident lethargy group
+        gp (int): outgoing lethargy group
+        sigma_s (vector): 0th order scatter xs
+        A (int): Atomic number
+        l (int): legendre order
+        mu(int): Leg poly of scattering cosine
 
-        Returns:
-        vectors: scattering xs's for moments [0,3]
+        Return:
+        float(int): integral value of gtg xs
         """
-        self.mu_s = np.zeros_like(self.L0)
-        g_min_vec = np.zeros_like(self.groups)
+        u_min, up_min = self.groups[g], self.groups[gp]
 
-        if A == 1: 
-            g_min_vec[:] = self.groups[-1]
-        else:
-            for g in range(self.groups.size):
-                g_min_vec[g] = self.group_bound(A,g)
-        
+        u_max  = self.groups[g+1]  if g < self.groups.size - 1  else self.groups[g]
+        up_max = self.groups[gp+1] if gp < self.groups.size - 1 else self.groups[gp]
+        sigma_s_gp = sigma_s[gp]
+
+        def sigma_s_kernel(u, up, sigma_s_gp, alpha):
+            #if alpha == 0: return sigma_s_gp * np.exp(up - u)
+            if alpha == 0: return sigma_s_gp * np.exp(u - up)
+
+            #elif up - np.log(1 / alpha) <= u <= up: return (sigma_s_gp / (1 - alpha)) * np.exp(up - u)
+            elif up - np.log(1 / alpha) <= u <= up: return (sigma_s_gp / (1 - alpha)) * np.exp(u - up)
+
+            return 0
+
+        def numerator_integrand(u, up, mu, l, g, gp, alpha, phi_u):
+            return sigma_s_kernel(u, up, sigma_s_gp, alpha) * mu[l,g,gp] * phi_u[gp] * np.exp(-up)
+
+        def inner_integral(up, mu, l, g, gp, alpha, phi_u):
+            if alpha > 0:
+                u_lower = max(u_min, up - np.log(1 / alpha))
+                u_upper = min(u_max, up)
+
+            #else: u_lower, u_upper = u_min, up
+            else: u_lower, u_upper = u_min, u_max
+
+            return quad(numerator_integrand, u_lower, u_upper, args=(up, mu, l, g, gp, alpha, phi_u))[0]
+    
+        numerator = quad(inner_integral, up_min, up_max, 
+                        args=(mu, l, g, gp, self.alpha(A), self.p0))[0]
+        denominator = quad(lambda up: self.p0[gp] * np.exp(-up), up_min, up_max)[0]
+    
+        return numerator / denominator if denominator > 0 else 0
+    
+    def calc_mu(self, A, sigma_s0, l, mu_s):
+        """
+        Find Pl(mu) for for an isotope for order l
+
+        Parameters:
+        A (int): Atomic mass
+        sigma_s0 (vector): s0 scattering xs's
+        l (int): legendre expansion order        
+        mu_s(matrix): matrix of scattering cosines before leg poly exp
+
+        Return 
+        matrix: g x g, P_l(mu) 
+        """
+        @staticmethod
         @njit(parallel=True)
-        def fill_mu_s(A,groups,alpha,g_min_vec):
-            mu_s = np.zeros((groups.size,groups.size))
-            for g in prange(groups.size):
-                for i in range(g, g_min_vec[g]):
-                    mu_s[g, i] = (((A + 1) * np.exp((groups[g] - groups[i]) / 2))
-                                   - ((A - 1) * np.exp((groups[i] - groups[g]) / 2))) / 2
-                    mu_s[g, i] *= (np.exp(groups[g] - groups[i]) / (1 - alpha))
+        def fill_mu_s(A, groups, g_min_vec):
+            mu_s = np.zeros((groups.size, groups.size))
+            for i in prange(groups.size):
+                mu_foo = np.zeros(g_min_vec[i])
+                for j in range(g_min_vec[i]):
+                    if i == j: 
+                        mu_foo[j] = (A -1) / (A + 1)
+                    else:
+                        mu_foo[j] = (((A + 1) * np.exp((groups[i] - groups[j]) / 2)) - 
+                                 ((A - 1) * np.exp((groups[j] - groups[i]) / 2))) / 2
+
+                end_idx = min(i + mu_foo.size, mu_s.shape[0])
+                mu_s[i, i:end_idx] = mu_foo[:end_idx - i]
 
             return mu_s
-        
+    
         if l == 1: 
-            self.mu_s = fill_mu_s(A,self.groups,self.alpha(A),g_min_vec)
-            return sigma_s0 @ self.mu_s
+            self.g_min_vec = np.zeros_like(self.groups, dtype = int)
+            for g in range(self.groups.size):
+                self.g_min_vec[g] = self.group_bound(A,g)
 
-        elif l == 2: mu = ((3 * np.linalg.matrix_power(self.mu_s,2) - 1) / 2)
+            return fill_mu_s(A, self.groups, self.g_min_vec)
+    
+        elif l == 2: return (3 * mu_s ** 2 - 1) / 2
+    
+        elif l == 3: return (5 * mu_s ** 3 - 3 * mu_s) / 2
 
-        elif l == 3: 
-            mu = ((5 * np.linalg.matrix_power(self.mu_s,3) - 3 * self.mu_s) / 2)
-
-        return sigma_s0 @ mu
-
-    def calc_xs_l(self,sigma_s_0,A):
+    def calc_xs_l(self,sigma_s0,A):
         """
         build full gxg matrix of scattering xs's for l = [0,3]
 
@@ -162,25 +203,55 @@ class Sp3:
         A (int): Mass Ratio
 
         Returns: 
-        4 matrices: gtg scattering xs's 
+        3D matrices (leg_order x G x G): gtg scattering xs's 
         """
-        # get the 0th moment gtg xs's
-        sigma_s0 = self.xs_gtg(sigma_s_0,A)
-        S0 = sigma_s0
+        # init xs and get mu
+        sigma_gtg = np.zeros((self.leg_order, self.groups.size, self.groups.size))
+        mu = np.zeros_like(sigma_gtg)
+        mu[0, :, :] = 1 
+        flip_E = np.flip(self.E)
 
-        # get the rest of the orders 
-        S_vals = [self.xs_sl(A,S0,l) for l in range(1,4)]
-        S1, S2, S3 = S_vals
-        
+        for l in range(1, self.leg_order): mu[l, :, :] = self.calc_mu(A, sigma_s0, l, mu[1, :, :])
+
+        for g in range(self.groups.size):
+            print(g)
+            for gg in range(g, self.group_bound(A,g)):
+                #for l in range(self.leg_order):
+                for l in range(1):
+#                    xs_frac = self.xs_fraction(flip_E[g], A)
+                    #sigma_gtg[l,g,gg] = self.compute_scattering(g, gg, sigma_s0 * xs_frac[l], A, l, mu)
+                    sigma_gtg[l,g,gg] = self.compute_scattering(g, gg, sigma_s0, A, l, mu)
+
+        # last group
+        for i in range(self.leg_order): sigma_gtg[i,:,-1] = sigma_gtg[i,:,-2]
+
+        # normalize to sigma_s0 frac
+        for g in range(self.groups.size - 1):
+            xs_frac = self.xs_fraction(flip_E[g], A)
+            #for l in range(self.leg_order):
+            for l in range(1):
+                row_sum = np.sum(sigma_gtg[l,g,:])
+                sigma_gtg[l,g,:] *= sigma_s0[g] * xs_frac[l] / row_sum
+
+        # last group
+        for l in range(self.leg_order):
+            xs_frac = self.xs_fraction(flip_E[-1], A)
+            sigma_gtg[l,-1,-1] = sigma_s0[-1] * xs_frac[l] 
+
+        for g in range(self.groups.size):
+            for l in range(1, self.leg_order): sigma_gtg[l,g,:] *= self.xs_fraction(flip_E[g], A)[l]
+
+        sigma_gtg[sigma_gtg <= self.tol] = 0
+
         # save gtg scattering xs's
         my_str = "H" if A == 1 else "U"
         with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "w") as f:
-            f.create_dataset("sigma_s0", data=S0)
-            f.create_dataset("sigma_s1", data=S1)
-            f.create_dataset("sigma_s2", data=S2)
-            f.create_dataset("sigma_s3", data=S3)
+            f.create_dataset("sigma_s0", data=sigma_gtg[0,:,:])
+            f.create_dataset("sigma_s1", data=sigma_gtg[1,:,:])
+            f.create_dataset("sigma_s2", data=sigma_gtg[2,:,:])
+            f.create_dataset("sigma_s3", data=sigma_gtg[3,:,:])
 
-        return S0, S1, S2, S3
+        return sigma_gtg
 
     def integrate_Sn(self,sigma_s0,A):
         """
@@ -194,22 +265,14 @@ class Sp3:
         4 matrices: Sn operator matrices
         """
         # Initialize I_vals and compute S_vals
-        I_vals = [np.zeros_like(self.groups) for _ in range(4)]
+        I_vals = [np.zeros_like(self.groups) for _ in range(self.leg_order)]
         S_vals = self.calc_xs_l(sigma_s0, A)
-        gridwidth = self.groups[1] - self.groups[0]
-        g_min_vec = np.zeros_like(self.groups)
-
-        if A == 1: 
-            g_min_vec[:] = self.groups[-1]
-        else:
-            for g in range(self.groups.size):
-                g_min_vec[g] = self.group_bound(A,g)
 
         # Parallelize core computation
-        self.parallel_integrate(self.groups, S_vals, I_vals, gridwidth, g_min_vec)
+        self.parallel_integrate(self.groups, S_vals, I_vals, self.gridspace, self.g_min_vec, self.leg_order)
 
         # Deallocate S_vals and return results
-        self.deallocate([S_vals,g_min_vec])
+        self.deallocate([S_vals])
 
         return I_vals
 
@@ -228,18 +291,12 @@ class Sp3:
         Similar to question 4 on final exam. 
         double integral. first one over u can be done explicitly, second one over u' must be done numerically
         """
-        # build gtg xs libraries
-#        sigma_t = np.diag(sigma_t) # diagonal of the total xs's
-
         # integration matrix corresponding to eqn 4
         I_vals = self.integrate_Sn(sigma_s,A)
-
         # loss operator corresponding to eqn 5
-        L_vals = [self._Ln(n, sigma_t, I_vals[n]) for n in range(4)]
+        L_vals = [self._Ln(n, sigma_t, I_vals[n]) for n in range(self.leg_order)]
 
         self.deallocate(I_vals)
-        self.deallocate([sigma_t])
-
         return L_vals
 
     def calc_phi0(self, properties):
@@ -252,26 +309,24 @@ class Sp3:
         t1 = time.time()
         # compute the loss operators
         print("U-238 Loss Operators")
-        L_vals_U  = self.build_Ln(self.AU,self.sigma_t_U,self.sigma_s_U)
+        L_vals_U  = self.build_Ln(self.AU,self.sigma_s_U,self.sigma_t_U)
         # send to csr to save memory
         L_U_sparse = [csr_matrix(matrix) for matrix in L_vals_U]
         print("H-1 Loss Operators")
-        L_vals_H = self.build_Ln(self.AH,self.sigma_t_H,self.sigma_s_H)
+        L_vals_H = self.build_Ln(self.AH,self.sigma_s_H,self.sigma_t_H)
         # send to csr to save memory
         L_H_sparse = [csr_matrix(matrix) for matrix in L_vals_H]
+        print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
 
         # do sum on csr
         sparse_sum = [L_U_sparse[i] + L_H_sparse[i] for i in range(len(L_U_sparse))]
         # reconstruct the full matrix
         self.L0, self.L1, self.L2, self.L3 = [matrix.toarray() for matrix in sparse_sum]
-
         # deallocate unnecessary memory
         self.deallocate(L_vals_U)
-        self.deallocate(L_vals_H)
         self.deallocate(L_U_sparse)
+        self.deallocate(L_vals_H)
         self.deallocate(L_H_sparse)
-        
-        print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
 
         # compute LHS and RHS
         print("phi0 LHS")
@@ -279,7 +334,6 @@ class Sp3:
                     + self.L3 @ self.L2 @ self.L1 @ self.L0)
         print("phi0 RHS")
         RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
-
         if properties: self.print_mat_properties(LHS)
 
         # Ax = b
@@ -287,7 +341,6 @@ class Sp3:
         self.phi0 = (self.jacobi_parallel(LHS,RHS,self.phi0) 
                         if self.is_diagonally_dominant(LHS) 
                             else np.linalg.solve(LHS,RHS))
-        
         # deallocate
         self.deallocate([LHS,RHS])
 
@@ -303,7 +356,8 @@ class Sp3:
         '''
         # compute LHS and RHS
         LHS = self.L3 @ self.L2 # matrix
-        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
+        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
+                @ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
 
         if properties: self.print_mat_properties(LHS)
 
@@ -312,7 +366,6 @@ class Sp3:
         self.phi2 = (self.jacobi_parallel(LHS,RHS,self.phi2) 
                         if self.is_diagonally_dominant(LHS) 
                             else np.linalg.solve(LHS,RHS))
-
         # deallocate
         self.deallocate([LHS,RHS])
 
@@ -332,9 +385,7 @@ class Sp3:
         """
         Calculates the Fission Source, Q
         Eq. 47
-        
-        Parameters: 
-        A (int): Atomic Number
+        u (int): Atomic Number
         sigma_f (vector): fission xs's
 
         Returns:
@@ -352,8 +403,8 @@ class Sp3:
     def plot_xs_t(self):
         # plot xs's for H and U vs E
         plt.figure()
-        plt.plot(self.E,self.sigma_t_U,label=r'$\Sigma_t^U$')
-        plt.plot(self.E,self.sigma_t_H,label=r'$\Sigma_t^H$')
+        plt.plot(np.flip(self.E),self.sigma_t_U,label=r'$\Sigma_t^U$')
+        plt.plot(np.flip(self.E),self.sigma_t_H,label=r'$\Sigma_t^H$')
         plt.xlabel("E")
         plt.ylabel(r"$\Sigma_t$")
         plt.title(f"XS's for {self.groups.size} groups")
@@ -366,7 +417,7 @@ class Sp3:
     def plot_fluxes(self):
         # plot phi0 and phi2
         plt.figure()
-        plt.plot(self.E,self.phi0,label=r'$\phi_0$')
+        plt.plot(np.flip(self.E),self.phi0,label=r'$\phi_0$')
         plt.title(r'$\phi_0(E)$')
         plt.xlabel('E')
         plt.ylabel(r'$\phi_0$')
@@ -376,7 +427,7 @@ class Sp3:
         plt.savefig(f'results/charts/phi0.png')
 
         plt.figure()
-        plt.plot(self.E,self.phi2,label=r'$\phi_2$')
+        plt.plot(np.flip(self.E),self.phi2,label=r'$\phi_2$')
         plt.title(r'$\phi_2(E)$')
         plt.xlabel('E')
         plt.ylabel(r'$\phi$')
@@ -397,7 +448,6 @@ class Sp3:
         matrix: diffusion coef for each fine group (gxg)
         """
         D = np.zeros((self.phi0.size,self.phi0.size))
-        gridwidth = self.groups[1] - self.groups[0]
 
         if n == 0:
             Linv = sp.linalg.inv(self.L1)
@@ -410,33 +460,25 @@ class Sp3:
         # operator on Phi_n(u)
         M = np.matmul(Linv,Phi)
 
-        g_min_vec = np.zeros_like(self.groups)
-        if A == 1:
-            g_min_vec[:] = (self.groups.size)
-        else:
-            for g in range(self.groups.size):
-                g_min_vec[g] = self.group_bound(A,g)
-
         @staticmethod
         @njit(parallel=True)
         def parallel_coef_d(D,g_min_vec,M,groups,gridwidth,Phi):
             for i in prange(D.shape[0]): 
-                g_min = int(g_min_vec[i])
-                num = np.zeros((g_min - i))
+                num = np.zeros((g_min_vec[i] - i))
 
                 # numerator integral
-                for j in range(i,g_min): 
+                for j in range(i,g_min_vec[i]): 
                     num[i-j] += (M[j] * np.exp(groups[j]) * gridwidth)
 
                 # accumulation matrix flipped
                 # not multiplying by self.E[i], it cancels out
                 num = np.flip(num)
                 # construct the diffusion coef matrix
-                D[i,i:g_min] = num / (np.sum(Phi[i:g_min] * gridwidth)) 
+                D[i,i:g_min_vec[i]] = num / (np.sum(Phi[i:g_min_vec[i]] * gridwidth * np.exp(groups[i]))) 
             
             return D
 
-        D = parallel_coef_d(D,g_min_vec,M,self.groups,gridwidth,Phi)
+        D = parallel_coef_d(D,self.g_min_vec,M,self.groups,self.gridspace,Phi)
     
         return D
 
@@ -455,20 +497,12 @@ class Sp3:
         """
         Phi = self.Phi0 if n == 0 else self.Phi2
         sigma_new = np.zeros_like(Phi)
-        gridwidth = self.groups[1] - self.groups[0]
-
-        g_min_vec = np.zeros_like(self.groups)
-        if A == 1:
-            g_min_vec[:] = (self.groups.size)
-        else:
-            for g in range(self.groups.size):
-                g_min_vec[g] = self.group_bound(A,g)
 
         @staticmethod
         @njit(parallel=True)
         def parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,groups,gridwidth):
             for i in prange(Phi.size):
-                g_min = int(g_min_vec[i])
+                g_min = g_min_vec[i]
                 den = np.zeros((g_min - i))
                 for j in range(i,g_min):
                     # note: E0 cancels out in division
@@ -479,7 +513,7 @@ class Sp3:
 
             return sigma_new
 
-        sigma_new = parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,self.groups,gridwidth)
+        sigma_new = parallel_sigma_upd(Phi,self.g_min_vec,sigma_new,sigma_x,self.groups,self.gridspace)
 
         return sigma_new
 
@@ -498,17 +532,9 @@ class Sp3:
         # build xs library, sigma_sn
         sigma_s = np.zeros_like(self.L0)
         Phi = self.Phi0 if n == 0 else self.Phi2
-        gridwidth = self.groups[1] - self.groups[0]
         # read scattering xs's from .h5
         my_str = "H" if A == 1 else "U"
         sigma_sl = self.read_sigma_s(l,A)
-
-        g_min_vec = np.zeros_like(self.groups)
-        if A == 1:
-            g_min_vec[:] = (self.groups.size)
-        else:
-            for g in range(self.groups.size):
-                g_min_vec[g] = self.group_bound(A,g)
 
         # in integetral, E0 dependence cancels out
         M = np.matmul(sigma_sl,Phi)
@@ -528,7 +554,7 @@ class Sp3:
                 
             return sigma_sl
 
-        sigma_sl = parallel_sigma_s_upd(Phi,g_min_vec,M,self.groups,gridwidth,sigma_sl)
+        sigma_sl = parallel_sigma_s_upd(Phi,self.g_min_vec,M,self.groups,self.gridspace,sigma_sl)
 
         return sigma_sl
 
@@ -539,6 +565,7 @@ class Sp3:
         if from_h5 == False:
             print("Starting phi0 calculation...")
             st = time.time()
+            self.initial_flux()
             self.calc_phi0(properties)
             et = time.time()
             print(f"phi0 calculation: {np.round(et-st,5)}")
@@ -661,18 +688,6 @@ class Sp3:
 
         return x_new
 
-    @staticmethod
-    def alpha(A):
-        """
-        calculate the scattering parameter for a given element
-        Parameters:
-        A (int): Mass Ratio
-
-        Returns
-        float
-        """
-        return ((A - 1) / (A + 1)) ** 2
-
     def print_mat_properties(self,LHS):
         """
         prints important matrix properties
@@ -688,6 +703,39 @@ class Sp3:
         print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
         print("Diag dominant: ", self.is_diagonally_dominant(LHS))
 
+    # helper functions and staticmethods
+
+    @staticmethod
+    def alpha(A):
+        """
+        calculate the scattering parameter for a given element
+        Parameters:
+        A (int): Mass Ratio
+
+        Returns
+        float
+        """
+        return ((A - 1) / (A + 1)) ** 2
+
+    @staticmethod
+    def xs_fraction(E, A):
+        """
+        Returns fractions for sigma_s0, sigma_s1, sigma_s2, sigma_s3 based on energy E (in eV) for U-238.
+        Adjusted for hyperfine group structure with detailed resonance treatment.
+        """
+        if A > 1:
+            if E > 1e6:  return np.array([0.5, 0.3, 0.15, 0.05])
+            elif E > 2e4:  return np.array([0.8, 0.15, 0.04, 0.01])
+            elif E > 1e3: return np.array([0.75, 0.18, 0.06, 0.01])
+            elif E > 10: return np.array([0.85, 0.12, 0.02, 0.01])
+            else: return np.array([0.92, 0.05, 0.02, 0.01])
+
+        else:
+            if E > 1e6: return np.array([0.6, 0.3, 0.08, 0.02])  
+            elif E > 1e5: return np.array([0.7, 0.2, 0.07, 0.03])
+            elif E > 1e3: return np.array([0.9, 0.08, 0.015, 0.005])  
+            else: return np.array([0.98, 0.015, 0.004, 0.001])  
+    
     @staticmethod
     def jacobi_update(A, b, x, x_new, i):
         """
@@ -698,18 +746,19 @@ class Sp3:
     
     @staticmethod
     @njit(parallel=True)
-    def parallel_integrate(groups, S_vals, I_vals, gridwidth, g_min_vec):
+    def parallel_integrate(groups, S_vals, I_vals, gridwidth, g_min_vec, leg_order):
         """
         Helper function to perform the integration in parallel.
         """
         for i in prange(groups.size):
             g_min = g_min_vec[i]
-            for j in range(i, g_min, -1):
-                g_bound = min(g_min, groups[-1])
-                factor = (g_bound - g_min) + (g_min - j)
+            for j in range(i, g_min):
+#                g_bound = min(g_min, groups[-1])
+#                factor = (g_bound - g_min) + (g_min - j)
 
-                for idx in range(4):
-                    I_vals[idx][i] += S_vals[idx][i, j] * factor * gridwidth
+                for l in range(leg_order):
+#                    I_vals[l][i] += S_vals[l, i, j] * factor * gridwidth
+                    I_vals[l][i] += S_vals[l, i, j] * gridwidth
 
     @staticmethod
     def _Ln(l,sigma,I): 
@@ -794,46 +843,3 @@ class Sp3:
 
         return np.array(vals), np.array(col_ind), np.array(row_ptr)
 
-#    @staticmethod
-#    def np_to_tl(A):
-#        core, factors = tucker(A, rank=[n//2 for n in A.shape])
-#        print(core.nbytes)
-#        reconstructed = tucker_to_tensor((core, factors))
-#        error = np.linalg.norm(A - reconstructed) / np.linalg.norm(A)
-#        print(f"Reconstruction error: {error:.4f}")
-#        return tl.tensor(A)
-#
-#    @staticmethod
-#    def tl_to_np(A):
-#        return tl.to_numpy(A)
-#
-#    @staticmethod
-#    def find_rank(A):
-#        ranks = range(1, 10)
-#
-#        for r in ranks:
-#            factors = parafac(A, rank=r)
-#            reconstructed = tl.cp_to_tensor(factors)
-#            error = np.linalg.norm(A - reconstructed) / np.linalg.norm(A)
-#            if error < .05: return r
-#            
-#
-#        # Plot the error curve to find the "elbow" point
-#        #import matplotlib.pyplot as plt
-#        #plt.plot(ranks, errors, marker="o")
-#        #plt.xlabel("Rank")
-#        #plt.ylabel("Reconstruction Error")
-#        #plt.title("Choosing Best Rank for CP Decomposition")
-#        #plt.show()
-#
-#    @staticmethod
-#    def estimate_tucker_rank(tensor, energy_threshold):
-#        """ Estimate Tucker ranks based on SVD energy retention. """
-#        ranks = []
-#        for mode in range(tl.ndim(tensor)):
-#            unfolding = tl.unfold(tensor, mode)  # Unfold tensor along mode
-#            singular_values = svd(unfolding, compute_uv=False)  # SVD on mode matrix
-#            total_energy = np.cumsum(singular_values**2) / np.sum(singular_values**2)
-#            rank = np.searchsorted(total_energy, energy_threshold) + 1  # Find where energy exceeds threshold
-#            ranks.append(rank)
-#        return ranks
