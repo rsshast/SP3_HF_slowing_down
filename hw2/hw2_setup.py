@@ -36,7 +36,7 @@ XS38 = np.array([xs38['E'],xs38['sigma_t'],xs38['sigma_s']])
 XS38 = XS38.T
 # create lethatgy grid
 E0 = 1e7 #this is set to ensure the first lethargy point is 0 for ease of physics comprehension
-deltaU = .00001 #grid spacing
+deltaU = .0001 #grid spacing
 Min = np.log(E0/1e7)
 Max = np.log(E0/1.0)
 n = int((Max - Min)/deltaU) #creates gridpoints
