@@ -11,10 +11,10 @@ class Sp3:
         chi (array): Fission spectrum matrix. Column 0: groups, Column 1: chi values.
         B2 (float): Buckling value.
         """
-        np.set_printoptions(precision=4, suppress=True)
         self.AH        = 1 # Atomic number of hydrogen
         self.AU        = 238 # Atomic number of U-238
         self.E0        = 1e7
+        self.groups    = xs_U[:,0] # lethargy groups, low leth to high leth
         self.sigma_t_H = np.flip(xs_H[:, 1])
         self.sigma_s_H = np.flip(xs_H[:, 2]) # Hydrogen xs's
         self.sigma_t_U = np.flip(xs_U[:, 1])
@@ -22,11 +22,11 @@ class Sp3:
         self.sigma_f   = np.flip(sigma_f) # fission xs's
         self.E         = np.exp(xs_U[:,0]) # energy groups, low to high
         self.chi       = np.flip(chi[:, 1]) # fission spectrum
-        self.groups    = xs_U[:,0] # lethargy groups, low leth to high leth
         self.B2        = B2 # geometric buckling
         self.tol       = 1e-6 # Small value threshold
         self.gridspace = self.groups[1] - self.groups[0]
         self.leg_order = 4
+        self.chi      /= np.trapz(self.chi,self.E) # normalize chi
 
         # Initialize other attributes
         self.L0   = np.zeros((self.groups.size,self.groups.size))
@@ -135,6 +135,9 @@ class Sp3:
 
         def numerator_integrand(u, up, mu, l, g, gp, alpha, phi_u):
             return sigma_s_kernel(u, up, sigma_s_gp, alpha) * mu[l,g,gp] * phi_u[gp] * np.exp(-up)
+#            if (l > 0 and g != gp): return (integrand * np.sum(mu[l,g,g:gp]))
+#            else: return integrand
+            return integrand
 
         def inner_integral(up, mu, l, g, gp, alpha, phi_u):
             if alpha > 0:
@@ -152,47 +155,10 @@ class Sp3:
     
         return numerator / denominator if denominator > 0 else 0
     
-    def calc_mu(self, A, sigma_s0, l, mu_s):
-        """
-        Find Pl(mu) for for an isotope for order l
-
-        Parameters:
-        A (int): Atomic mass
-        sigma_s0 (vector): s0 scattering xs's
-        l (int): legendre expansion order        
-        mu_s(matrix): matrix of scattering cosines before leg poly exp
-
-        Return 
-        matrix: g x g, P_l(mu) 
-        """
-        @staticmethod
-        @njit(parallel=True)
-        def fill_mu_s(A, groups, g_min_vec):
-            mu_s = np.zeros((groups.size, groups.size))
-            for i in prange(groups.size):
-                mu_foo = np.zeros(g_min_vec[i])
-                for j in range(g_min_vec[i]):
-                    if i == j: 
-                        mu_foo[j] = (A -1) / (A + 1)
-                    else:
-                        mu_foo[j] = (((A + 1) * np.exp((groups[i] - groups[j]) / 2)) - 
-                                 ((A - 1) * np.exp((groups[j] - groups[i]) / 2))) / 2
-
-                end_idx = min(i + mu_foo.size, mu_s.shape[0])
-                mu_s[i, i:end_idx] = mu_foo[:end_idx - i]
-
-            return mu_s
-    
-        if l == 1: 
-            self.g_min_vec = np.zeros_like(self.groups, dtype = int)
-            for g in range(self.groups.size):
-                self.g_min_vec[g] = self.group_bound(A,g)
-
-            return fill_mu_s(A, self.groups, self.g_min_vec)
-    
-        elif l == 2: return (3 * mu_s ** 2 - 1) / 2
-    
-        elif l == 3: return (5 * mu_s ** 3 - 3 * mu_s) / 2
+    def g_min_vec_fn(self,A):
+        g_min_vec = np.zeros_like(self.groups, dtype = int)
+        for g in range(self.groups.size): g_min_vec[g] = self.group_bound(A,g)
+        return g_min_vec
 
     def calc_xs_l(self,sigma_s0,A):
         """
@@ -205,46 +171,74 @@ class Sp3:
         Returns: 
         3D matrices (leg_order x G x G): gtg scattering xs's 
         """
+        G = self.groups.size
+        sigma_gtg = np.zeros((self.leg_order, G, G))
+
+        mu = self.compute_mu_matrix(self.groups, A)  
+
+        flip_E = np.flip(self.E)
+        for l in range(self.leg_order):
+            P_l_mu = legendre(l)(mu)
+    
+            for g in range(G):
+                gmin = self.g_min_vec[g]
+                for gp in range(g,self.group_bound(A,g)):  
+                    sigma_gtg[l,g,gp] = P_l_mu[g, gp] * sigma_s0[gp] * self.p0[gp] * self.E[gp]
+#                    sigma_gtg[l,g,gp] = (P_l_mu[g, gp] * sigma_s0[gp] * self.p0[gp] * self.E[gp] / 
+#                                    np.sum(self.p0[g:gmin]) * np.sum(self.E[g:gmin]))
+    
+        for g in range(G):
+            for l in range(self.leg_order):
+                norm = np.sum(sigma_gtg[l, g, :])
+                target = sigma_s0[g] * self.xs_fraction(flip_E[g], A)[l]
+                if norm > self.tol:
+                    sigma_gtg[l, g, :] *= target / norm
+                else:
+                    sigma_gtg[l, g, :] = 0.0
+   
+        sigma_gtg[sigma_gtg <= self.tol] = 0.0
+    
+        # Save to HDF5
+        my_str = "H" if A == 1 else "U"
+        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "w") as f:
+            for l in range(self.leg_order):
+                f.create_dataset(f"sigma_s{l}", data=sigma_gtg[l])
+    
+        return sigma_gtg
+        """
         # init xs and get mu
         sigma_gtg = np.zeros((self.leg_order, self.groups.size, self.groups.size))
         mu = np.zeros_like(sigma_gtg)
         mu[0, :, :] = 1 
         flip_E = np.flip(self.E)
 
-        for l in range(1, self.leg_order): mu[l, :, :] = self.calc_mu(A, sigma_s0, l, mu[1, :, :])
+        mu[1,:,:] = self.calc_mu(A, sigma_s0, 1, None)
+        for l in range(2, self.leg_order): mu[l,:,:] = self.calc_mu(A, sigma_s0, l, mu[1,:,:])
 
         for g in range(self.groups.size):
             print(g)
             for gg in range(g, self.group_bound(A,g)):
-                #for l in range(self.leg_order):
-                for l in range(1):
-#                    xs_frac = self.xs_fraction(flip_E[g], A)
-                    #sigma_gtg[l,g,gg] = self.compute_scattering(g, gg, sigma_s0 * xs_frac[l], A, l, mu)
-                    sigma_gtg[l,g,gg] = self.compute_scattering(g, gg, sigma_s0, A, l, mu)
+                for l in range(self.leg_order):
+                    sigma_gtg[l,g,gg] = self.compute_scattering(g, gg, sigma_s0 
+                                        * self.xs_fraction(flip_E[g],A)[l], A, l, mu)
 
         # last group
         for i in range(self.leg_order): sigma_gtg[i,:,-1] = sigma_gtg[i,:,-2]
 
         # normalize to sigma_s0 frac
         for g in range(self.groups.size - 1):
-            xs_frac = self.xs_fraction(flip_E[g], A)
-            #for l in range(self.leg_order):
-            for l in range(1):
-                row_sum = np.sum(sigma_gtg[l,g,:])
-                sigma_gtg[l,g,:] *= sigma_s0[g] * xs_frac[l] / row_sum
+            for l in range(self.leg_order):
+                #sigma_gtg[l,g,:] *= sigma_s0[g] * self.xs_fraction(flip_E[g],A)[l] / np.sum(sigma_gtg[l,g,:])
+                sigma_gtg[l,g,:] *= self.xs_fraction(flip_E[g],A)[l] / np.sum(sigma_gtg[l,g,:])
 
         # last group
-        for l in range(self.leg_order):
-            xs_frac = self.xs_fraction(flip_E[-1], A)
-            sigma_gtg[l,-1,-1] = sigma_s0[-1] * xs_frac[l] 
-
-        for g in range(self.groups.size):
-            for l in range(1, self.leg_order): sigma_gtg[l,g,:] *= self.xs_fraction(flip_E[g], A)[l]
+        for l in range( self.leg_order): sigma_gtg[l,-1,-1] = sigma_s0[-1] * self.xs_fraction(flip_E[-1],A)[l] 
 
         sigma_gtg[sigma_gtg <= self.tol] = 0
 
         # save gtg scattering xs's
         my_str = "H" if A == 1 else "U"
+
         with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "w") as f:
             f.create_dataset("sigma_s0", data=sigma_gtg[0,:,:])
             f.create_dataset("sigma_s1", data=sigma_gtg[1,:,:])
@@ -252,6 +246,7 @@ class Sp3:
             f.create_dataset("sigma_s3", data=sigma_gtg[3,:,:])
 
         return sigma_gtg
+        """
 
     def integrate_Sn(self,sigma_s0,A):
         """
@@ -266,14 +261,19 @@ class Sp3:
         """
         # Initialize I_vals and compute S_vals
         I_vals = [np.zeros_like(self.groups) for _ in range(self.leg_order)]
+#        I_vals = np.zeros((self.leg_order,self.groups,self.groups))
         S_vals = self.calc_xs_l(sigma_s0, A)
 
-        # Parallelize core computation
+#        gridwidths = np.diff(np.flip(self.E))
+#        for g in range(self.groups.size -1):
+#            for l in range(self.leg_order):
+#                I_vals[l,g,:] = S_vals[l,g,:] * gridwidths[g]
         self.parallel_integrate(self.groups, S_vals, I_vals, self.gridspace, self.g_min_vec, self.leg_order)
 
-        # Deallocate S_vals and return results
+        # Deallocate S_vals
         self.deallocate([S_vals])
 
+        #return self.calc_xs_l(sigma_s0, A)
         return I_vals
 
     def build_Ln(self, A, sigma_s, sigma_t):
@@ -291,6 +291,7 @@ class Sp3:
         Similar to question 4 on final exam. 
         double integral. first one over u can be done explicitly, second one over u' must be done numerically
         """
+        self.g_min_vec = self.g_min_vec_fn(A)
         # integration matrix corresponding to eqn 4
         I_vals = self.integrate_Sn(sigma_s,A)
         # loss operator corresponding to eqn 5
@@ -311,29 +312,56 @@ class Sp3:
         print("U-238 Loss Operators")
         L_vals_U  = self.build_Ln(self.AU,self.sigma_s_U,self.sigma_t_U)
         # send to csr to save memory
-        L_U_sparse = [csr_matrix(matrix) for matrix in L_vals_U]
-        print("H-1 Loss Operators")
-        L_vals_H = self.build_Ln(self.AH,self.sigma_s_H,self.sigma_t_H)
-        # send to csr to save memory
-        L_H_sparse = [csr_matrix(matrix) for matrix in L_vals_H]
+        #L_U_sparse = [csr_matrix(matrix) for matrix in L_vals_U]
+#        print("H-1 Loss Operators")
+#        L_vals_H = self.build_Ln(self.AH,self.sigma_s_H,self.sigma_t_H)
+        ## send to csr to save memory
+        #L_H_sparse = [csr_matrix(matrix) for matrix in L_vals_H]
         print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
 
         # do sum on csr
-        sparse_sum = [L_U_sparse[i] + L_H_sparse[i] for i in range(len(L_U_sparse))]
+        #sparse_sum = [L_U_sparse[i] + L_H_sparse[i] for i in range(len(L_U_sparse))]
         # reconstruct the full matrix
-        self.L0, self.L1, self.L2, self.L3 = [matrix.toarray() for matrix in sparse_sum]
+#        self.L0, self.L1, self.L2, self.L3 = [L_vals_U[i] + L_vals_H[i] for i in range(4)]
+        self.L0, self.L1, self.L2, self.L3 = [L_vals_U[i] for i in range(4)]
+#        plt.figure()
+#        plt.imshow(np.log10(self.L0), origin='upper')
+#        plt.colorbar()
+#        plt.show()
+#        plt.savefig("L0.png")
+#        plt.figure()
+#        plt.imshow(self.L1, origin='upper')
+#        plt.colorbar()
+#        plt.savefig("L1.png")
+#        plt.figure()
+#        plt.imshow(self.L2, origin='upper')
+#        plt.colorbar()
+#        plt.savefig("L2.png")
+#        plt.figure()
+#        plt.imshow(self.L3, origin='upper')
+#        plt.colorbar()
+#        plt.savefig("L3.png")
+        #self.L0, self.L1, self.L2, self.L3 = [matrix.toarray() for matrix in sparse_sum]
         # deallocate unnecessary memory
         self.deallocate(L_vals_U)
-        self.deallocate(L_U_sparse)
-        self.deallocate(L_vals_H)
-        self.deallocate(L_H_sparse)
+        #self.deallocate(L_U_sparse)
+#        self.deallocate(L_vals_H)
+        #self.deallocate(L_H_sparse)
 
         # compute LHS and RHS
         print("phi0 LHS")
-        LHS = (9 * self.B2 ** 2 + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
+        I = np.eye(self.groups.size)
+        B4 = self.B2 ** 2 * I
+        LHS = (9 * B4 * I + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
                     + self.L3 @ self.L2 @ self.L1 @ self.L0)
         print("phi0 RHS")
         RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
+        # account for bin widths
+        #W = np.diag(np.gradient(self.groups))  # lethargy bin widths
+        #LHS = W @ LHS @ W
+        #RHS = W @ RHS
+
+        # matrix properties
         if properties: self.print_mat_properties(LHS)
 
         # Ax = b
@@ -341,6 +369,10 @@ class Sp3:
         self.phi0 = (self.jacobi_parallel(LHS,RHS,self.phi0) 
                         if self.is_diagonally_dominant(LHS) 
                             else np.linalg.solve(LHS,RHS))
+        print(self.phi0)
+
+#        self.phi0 /= np.trapz(self.phi0, x=self.E)
+
         # deallocate
         self.deallocate([LHS,RHS])
 
@@ -359,13 +391,19 @@ class Sp3:
         RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
                 @ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
 
+        W = np.diag(np.gradient(self.groups))  # lethargy bin widths
+        LHS = W @ LHS @ W
+        RHS = W @ RHS
+
         if properties: self.print_mat_properties(LHS)
 
         # Ax = b
-        self.phi2 = np.zeros_like(self.phi0)
+        self.phi2 = np.zeros_like(self.groups)
         self.phi2 = (self.jacobi_parallel(LHS,RHS,self.phi2) 
                         if self.is_diagonally_dominant(LHS) 
                             else np.linalg.solve(LHS,RHS))
+#        self.phi2 /= np.trapz(self.phi2, x=self.E)
+
         # deallocate
         self.deallocate([LHS,RHS])
 
@@ -427,9 +465,10 @@ class Sp3:
         plt.savefig(f'results/charts/phi0.png')
 
         plt.figure()
-        plt.plot(np.flip(self.E),self.phi2,label=r'$\phi_2$')
-        plt.title(r'$\phi_2(E)$')
+        plt.plot(np.flip(self.E),np.abs(self.phi2),label=r'$\phi_2$')
+        plt.title(r'$|\phi_2(E)|$')
         plt.xlabel('E')
+        plt.yscale('log')
         plt.ylabel(r'$\phi$')
         plt.xscale('log')
         plt.grid(True, which='both')
@@ -581,6 +620,7 @@ class Sp3:
 
             print("Starting Phi0 and Phi2 calculation...")
             self.calc_Phi()
+            assert 0 == 1
 
             print("Saving Data...")
             df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
@@ -700,8 +740,9 @@ class Sp3:
         """
         print("Rank of LHS:", np.linalg.matrix_rank(LHS))
         print("Determinant of LHS:", np.linalg.det(LHS))
+        print("Log-Condition Number:", np.linalg.cond(LHS))
         print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
-        print("Diag dominant: ", self.is_diagonally_dominant(LHS))
+        print("Diagonally dominant: ", self.is_diagonally_dominant(LHS))
 
     # helper functions and staticmethods
 
@@ -752,13 +793,22 @@ class Sp3:
         """
         for i in prange(groups.size):
             g_min = g_min_vec[i]
+    
             for j in range(i, g_min):
-#                g_bound = min(g_min, groups[-1])
-#                factor = (g_bound - g_min) + (g_min - j)
-
                 for l in range(leg_order):
-#                    I_vals[l][i] += S_vals[l, i, j] * factor * gridwidth
-                    I_vals[l][i] += S_vals[l, i, j] * gridwidth
+                    val = S_vals[l, i, j]
+                    if np.isfinite(val):
+                        I_vals[l][i] += val * gridwidth
+
+#        for i in prange(groups.size):
+#            g_min = g_min_vec[i]
+#            for j in range(i, g_min):
+##                g_bound = min(g_min, groups[-1])
+##                factor = (g_bound - g_min) + (g_min - j)
+#
+#                for l in range(leg_order):
+##                    I_vals[l][i] += S_vals[l, i, j] * factor * gridwidth
+#                    I_vals[l][i] += S_vals[l, i, j] * gridwidth
 
     @staticmethod
     def _Ln(l,sigma,I): 
@@ -815,6 +865,18 @@ class Sp3:
         for obj in my_list:
             del obj 
         my_list.clear()  
+
+    @staticmethod
+    def compute_mu_matrix(lethargy, A):
+        """
+        Compute scattering cosine matrix mu(u, u') for all g, g' combinations.
+        """
+        u = lethargy.reshape(-1, 1)     # (G,1)
+        up = lethargy.reshape(1, -1)    # (1,G)
+        mu = ((A + 1) / 2) * np.exp((up - u) / 2) - ((A - 1) / 2) * np.exp((u - up) / 2)
+        mu = np.clip(mu, -1, 1)
+
+        return mu
 
     @staticmethod
     def den_to_csr(A):
