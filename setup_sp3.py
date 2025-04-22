@@ -3,7 +3,7 @@ from __init__ import *
 # user inputs
 E0 = 1e7 
 gridpoints = 5000
-B2 = .001
+B2 = 1
 NH = 5
 NU = 1
 properties = True # if true, print matrix properties
@@ -32,17 +32,13 @@ AU = 238
 AO = 16
 alphaU = ((AU-1)/(AU+1))**2 
 alphaO = ((AO-1)/(AO+1))**2
-###
+
 data_dir = 'data/'
 chi35 = pd.read_csv(f'{data_dir}chi_u235.txt', sep = '\t',header = 0)
 H1 = pd.read_csv(f'{data_dir}xs_h1_T293k.txt', sep  = '\t', header = 0)
 U238 = pd.read_csv(f'{data_dir}xs_u238_T293k.txt',sep  = '\t', header = 0)
-#sigma_f = pd.read_csv(f'{data_dir}xs_u238_fission.csv', sep = ',',header=0).to_numpy()
 sigma_f = pd.read_csv(f'{data_dir}xs_u238_fission.csv', sep = ',',header=None,dtype=float).to_numpy()
-###
+
 chi = np.array([chi35['E'],chi35['chi']]).T
 H = np.array([H1['E'],H1['sigma_t'],H1['sigma_s']]).T
 XS38 = np.array([U238['E'],U238['sigma_t'],U238['sigma_s']]).T
-#sigma_f = np.array([sigma_F['E'],sigma_F['sigma_f']]).T
-
-#############################################################
