@@ -217,48 +217,6 @@ class Sp3:
                 f.create_dataset(f"sigma_s{l}", data=sigma_gtg[l])
     
         return sigma_gtg
-        """
-        # init xs and get mu
-        sigma_gtg = np.zeros((self.leg_order, self.groups.size, self.groups.size))
-        mu = np.zeros_like(sigma_gtg)
-        mu[0, :, :] = 1 
-        flip_E = np.flip(self.E)
-
-        mu[1,:,:] = self.calc_mu(A, sigma_s0, 1, None)
-        for l in range(2, self.leg_order): mu[l,:,:] = self.calc_mu(A, sigma_s0, l, mu[1,:,:])
-
-        for g in range(self.groups.size):
-            print(g)
-            for gg in range(g, self.group_bound(A,g)):
-                for l in range(self.leg_order):
-                    sigma_gtg[l,g,gg] = self.compute_scattering(g, gg, sigma_s0 
-                                        * self.xs_fraction(flip_E[g],A)[l], A, l, mu)
-
-        # last group
-        for i in range(self.leg_order): sigma_gtg[i,:,-1] = sigma_gtg[i,:,-2]
-
-        # normalize to sigma_s0 frac
-        for g in range(self.groups.size - 1):
-            for l in range(self.leg_order):
-                #sigma_gtg[l,g,:] *= sigma_s0[g] * self.xs_fraction(flip_E[g],A)[l] / np.sum(sigma_gtg[l,g,:])
-                sigma_gtg[l,g,:] *= self.xs_fraction(flip_E[g],A)[l] / np.sum(sigma_gtg[l,g,:])
-
-        # last group
-        for l in range( self.leg_order): sigma_gtg[l,-1,-1] = sigma_s0[-1] * self.xs_fraction(flip_E[-1],A)[l] 
-
-        sigma_gtg[sigma_gtg <= self.tol] = 0
-
-        # save gtg scattering xs's
-        my_str = "H" if A == 1 else "U"
-
-        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "w") as f:
-            f.create_dataset("sigma_s0", data=sigma_gtg[0,:,:])
-            f.create_dataset("sigma_s1", data=sigma_gtg[1,:,:])
-            f.create_dataset("sigma_s2", data=sigma_gtg[2,:,:])
-            f.create_dataset("sigma_s3", data=sigma_gtg[3,:,:])
-
-        return sigma_gtg
-        """
 
     def integrate_Sn(self,sigma_s0,A):
         """
@@ -306,7 +264,7 @@ class Sp3:
         self.deallocate(I_vals)
         return L_vals
 
-    def calc_Ln(self, properties):
+    def calc_Ln(self):
         """
         Calculate the 0th scalar flux moment (phi0).
 
@@ -336,64 +294,6 @@ class Sp3:
 
         return self.L0, self.L1, self.L2, self.L3
 
-        # compute LHS and RHS
-#        print("phi0 LHS")
-#        I = np.eye(self.groups.size)
-#        B4 = self.B2 ** 2 * I
-#        LHS = (9 * B4 * I + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
-#                    + self.L3 @ self.L2 @ self.L1 @ self.L0)
-#        print("phi0 RHS")
-        #RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
-#        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.groups)
-        # account for bin widths
-        #W = np.diag(np.gradient(self.groups))  # lethargy bin widths
-        #LHS = W @ LHS @ W
-        #RHS = W @ RHS
-
-        # matrix properties
-#        if properties: self.print_mat_properties(LHS)
-
-        # Ax = b
-#        self.phi0 = np.zeros_like(self.groups)
-#        self.phi0 = (self.jacobi_parallel(LHS,RHS,self.phi0) 
-#                        if self.is_diagonally_dominant(LHS) 
-#                            else np.linalg.solve(LHS,RHS))
-#        print(self.phi0)
-
-#        self.phi0 /= np.trapz(self.phi0, x=self.E)
-
-        # deallocate
-        self.deallocate([LHS,RHS])
-
-        return self.phi0
-
-    def calc_phi2(self, properties):
-        '''
-        calculate the 2nd scalar flux moment. Eq 28 in paper
-        big matmul
-        
-        Returns:
-        vector: phi2
-        '''
-        # compute LHS and RHS
-        LHS = self.L3 @ self.L2 # matrix
-        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
-                #@ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
-                @ (self.L0 @ self.phi0 - self.groups)) / 2 # vector
-
-        if properties: self.print_mat_properties(LHS)
-
-        # Ax = b
-        self.phi2 = np.zeros_like(self.groups)
-        self.phi2 = (self.jacobi_parallel(LHS,RHS,self.phi2) 
-                        if self.is_diagonally_dominant(LHS) 
-                            else np.linalg.solve(LHS,RHS))
-
-        # deallocate
-        self.deallocate([LHS,RHS])
-
-        return self.phi2
-
     def calc_Phi(self):
         """
         Combine phi0 and phi2 to calculate the scalar flux moments Phi0 and Phi2.
@@ -415,7 +315,6 @@ class Sp3:
         vector: Fission Source
         """
         Q = np.zeros_like(self.phi0)
-        gridwidth = self.groups[1] - self.groups[0]
         for i in range(self.phi0.size):
             g_min = self.group_bound(A,i)
             for j in range(i,g_min): Q[i] += sigma_f[j] * self.phi0[j] * np.exp(self.groups[i])
@@ -589,7 +488,7 @@ class Sp3:
         Returns:
         phi0 and phi2 in TT format
         """
-        # convert Loss, chi, and scalers to TT
+        # convert Loss, chi, and scalers to Tensorly
         self.L0 = self.npy_to_tensor(self.L0)
         self.L1 = self.npy_to_tensor(self.L1)
         self.L2 = self.npy_to_tensor(self.L2)
@@ -611,9 +510,6 @@ class Sp3:
                 @ (self.L0 @ self.phi0 - self.groups)) / 2 
         self.phi2 = np.linalg.solve(LHS,RHS)
 
-        return self.phi0, self.phi2
-
-
     def run(self, properties, from_h5):
         """
         Run the complete SP3 calculation process.
@@ -628,6 +524,7 @@ class Sp3:
                 f.create_dataset("L1", data=self.L1)
                 f.create_dataset("L2", data=self.L2)
                 f.create_dataset("L3", data=self.L3)
+
         else:
             print("Reading Data From File...")
             with h5py.File(f"{scratch_dir}/Ln.h5", "r") as f:
@@ -636,7 +533,7 @@ class Sp3:
                 self.L2 = f["L2"][:]
                 self.L3 = f["L3"][:]
             print("Ln Read! \nSolving for phi in TT")
-        self.phi0, self.phi2 = self.calc_phi_tt() 
+        self.calc_phi_tt() 
         et = time.time()
         print(f"phi calculation: {np.round(et-st,5)}")
 
@@ -698,7 +595,6 @@ class Sp3:
                     xs = self.sigma_s_update(A, l, n)
                     f.create_dataset(f"new_xs_{name}_{l}_{n}", data=xs, compression="gzip", compression_opts=9)
         print(f"Time gtg XS Update: {np.round(time.time() - st, 5)}s")
-
         print("Calculation completed.")
 
     def jacobi_parallel(self,A, b, x0, eps=1e-6, max_iter=1000):
@@ -811,16 +707,6 @@ class Sp3:
                     if np.isfinite(val):
                         I_vals[l][i] += val * gridwidth
 
-#        for i in prange(groups.size):
-#            g_min = g_min_vec[i]
-#            for j in range(i, g_min):
-##                g_bound = min(g_min, groups[-1])
-##                factor = (g_bound - g_min) + (g_min - j)
-#
-#                for l in range(leg_order):
-##                    I_vals[l][i] += S_vals[l, i, j] * factor * gridwidth
-#                    I_vals[l][i] += S_vals[l, i, j] * gridwidth
-
     @staticmethod
     def _Ln(l,sigma,I): 
         """
@@ -849,7 +735,7 @@ class Sp3:
         """
         # loop over rows
         for i in range(A.shape[0]):
-            row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  # Sum of non-diagonals
+            row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  
             if np.abs(A[i, i]) < row_sum: return False
 
         return True
