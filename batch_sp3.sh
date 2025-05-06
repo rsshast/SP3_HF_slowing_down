@@ -4,8 +4,8 @@
 #SBATCH --mail-type=None
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=36
-#SBATCH --mem=100G
-#SBATCH --time=03:00:00
+#SBATCH --mem=50G
+#SBATCH --time=10:00:00
 #SBATCH --account=bckiedro0
 #SBATCH --partition=standard
 #SBATCH --export=ALL

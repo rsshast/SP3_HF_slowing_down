@@ -22,11 +22,15 @@ class Sp3:
         self.sigma_f   = np.flip(sigma_f) # fission xs's
         self.E         = np.exp(xs_U[:,0]) # energy groups, low to high
         self.chi       = np.flip(chi[:, 1]) # fission spectrum
+        #self.chi       = self.groups # fission spectrum
         self.B2        = B2 # geometric buckling
         self.tol       = 1e-6 # Small value threshold
         self.gridspace = self.groups[1] - self.groups[0]
         self.leg_order = 4
         self.chi      /= np.trapz(self.chi,self.E) # normalize chi
+        self.T         = 293 # degrees Kelvin
+        self.k         = 8.617e-5  # eV/K (Boltzmann constant)
+        self.kT        = self.k * self.T
 
         # Initialize other attributes
         self.L0   = np.zeros((self.groups.size,self.groups.size))
@@ -68,8 +72,7 @@ class Sp3:
                         self.gridspace * (sigma_su[i] / (1 - alpha)) 
                             - self.gridspace * sigma_sh[i])
 
-            if i == 0:
-                phi[i] = chi[i]/Sigma_R
+            if i == 0: phi[i] = chi[i]/Sigma_R
 
             else:
                 #Scattering Source for Hydrogen
@@ -175,29 +178,38 @@ class Sp3:
         sigma_gtg = np.zeros((self.leg_order, G, G))
 
         mu = self.compute_mu_matrix(self.groups, A)  
-
         flip_E = np.flip(self.E)
+
+        # UPSCATTER INCLUDED
         for l in range(self.leg_order):
             P_l_mu = legendre(l)(mu)
     
+            for gp in range(G):
+                for g in range(self.group_bound(A,gp)):  
+                    # use maxwellian to get upscatter contributions
+                    if g < gp and flip_E[g] < 50: # upscattering at 50 eV
+                        kernel = ((1 + self.kT / (2 * A * flip_E[g])) * erf(np.sqrt(A * flip_E[g] / self.kT))
+                                    + np.sqrt(self.kT / (np.pi * A * flip_E[g])) * np.exp(-A*flip_E[g] / self.kT))
+                        sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * kernel
+
+                    elif gp > g and flip_E[g] > 50: # no upscatter contribution
+                        sigma_gtg[l,gp,g] = 0
+
+                    else:
+                        sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * flip_E[g]
+
+        # normalize
+        for l in range(self.leg_order):
+            P_l_mu = legendre(l)(mu)
             for g in range(G):
-                gmin = self.g_min_vec[g]
-                for gp in range(g,self.group_bound(A,g)):  
-                    sigma_gtg[l,g,gp] = P_l_mu[g, gp] * sigma_s0[gp] * self.p0[gp] * self.E[gp]
-#                    sigma_gtg[l,g,gp] = (P_l_mu[g, gp] * sigma_s0[gp] * self.p0[gp] * self.E[gp] / 
-#                                    np.sum(self.p0[g:gmin]) * np.sum(self.E[g:gmin]))
-    
-        for g in range(G):
-            for l in range(self.leg_order):
-                norm = np.sum(sigma_gtg[l, g, :])
+                for gg in range(G):
+                    norm = np.sum(sigma_gtg[l, g, :])
+                    sigma_gtg[l,g,gp] = (P_l_mu[g,gg] * sigma_s0[g]) / norm if norm > self.tol else 0
                 target = sigma_s0[g] * self.xs_fraction(flip_E[g], A)[l]
-                if norm > self.tol:
-                    sigma_gtg[l, g, :] *= target / norm
-                else:
-                    sigma_gtg[l, g, :] = 0.0
-   
+                sigma_gtg[l,g,:] *= target/norm if norm > self.tol else 0
+
         sigma_gtg[sigma_gtg <= self.tol] = 0.0
-    
+
         # Save to HDF5
         my_str = "H" if A == 1 else "U"
         with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "w") as f:
@@ -261,19 +273,13 @@ class Sp3:
         """
         # Initialize I_vals and compute S_vals
         I_vals = [np.zeros_like(self.groups) for _ in range(self.leg_order)]
-#        I_vals = np.zeros((self.leg_order,self.groups,self.groups))
         S_vals = self.calc_xs_l(sigma_s0, A)
 
-#        gridwidths = np.diff(np.flip(self.E))
-#        for g in range(self.groups.size -1):
-#            for l in range(self.leg_order):
-#                I_vals[l,g,:] = S_vals[l,g,:] * gridwidths[g]
         self.parallel_integrate(self.groups, S_vals, I_vals, self.gridspace, self.g_min_vec, self.leg_order)
 
         # Deallocate S_vals
         self.deallocate([S_vals])
 
-        #return self.calc_xs_l(sigma_s0, A)
         return I_vals
 
     def build_Ln(self, A, sigma_s, sigma_t):
@@ -300,7 +306,7 @@ class Sp3:
         self.deallocate(I_vals)
         return L_vals
 
-    def calc_phi0(self, properties):
+    def calc_Ln(self, properties):
         """
         Calculate the 0th scalar flux moment (phi0).
 
@@ -312,64 +318,47 @@ class Sp3:
         print("U-238 Loss Operators")
         L_vals_U  = self.build_Ln(self.AU,self.sigma_s_U,self.sigma_t_U)
         # send to csr to save memory
-        #L_U_sparse = [csr_matrix(matrix) for matrix in L_vals_U]
-#        print("H-1 Loss Operators")
-#        L_vals_H = self.build_Ln(self.AH,self.sigma_s_H,self.sigma_t_H)
-        ## send to csr to save memory
-        #L_H_sparse = [csr_matrix(matrix) for matrix in L_vals_H]
+        L_U_sparse = [csr_matrix(matrix) for matrix in L_vals_U]
+        print("H-1 Loss Operators")
+        L_vals_H = self.build_Ln(self.AH,self.sigma_s_H,self.sigma_t_H)
+        # send to csr to save memory
+        L_H_sparse = [csr_matrix(matrix) for matrix in L_vals_H]
         print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
 
         # do sum on csr
-        #sparse_sum = [L_U_sparse[i] + L_H_sparse[i] for i in range(len(L_U_sparse))]
+        sparse_sum = [L_U_sparse[i] + L_H_sparse[i] for i in range(len(L_U_sparse))]
         # reconstruct the full matrix
-#        self.L0, self.L1, self.L2, self.L3 = [L_vals_U[i] + L_vals_H[i] for i in range(4)]
-        self.L0, self.L1, self.L2, self.L3 = [L_vals_U[i] for i in range(4)]
-#        plt.figure()
-#        plt.imshow(np.log10(self.L0), origin='upper')
-#        plt.colorbar()
-#        plt.show()
-#        plt.savefig("L0.png")
-#        plt.figure()
-#        plt.imshow(self.L1, origin='upper')
-#        plt.colorbar()
-#        plt.savefig("L1.png")
-#        plt.figure()
-#        plt.imshow(self.L2, origin='upper')
-#        plt.colorbar()
-#        plt.savefig("L2.png")
-#        plt.figure()
-#        plt.imshow(self.L3, origin='upper')
-#        plt.colorbar()
-#        plt.savefig("L3.png")
-        #self.L0, self.L1, self.L2, self.L3 = [matrix.toarray() for matrix in sparse_sum]
-        # deallocate unnecessary memory
+        self.L0, self.L1, self.L2, self.L3 = [L_vals_U[i] + L_vals_H[i] for i in range(4)]
         self.deallocate(L_vals_U)
-        #self.deallocate(L_U_sparse)
-#        self.deallocate(L_vals_H)
-        #self.deallocate(L_H_sparse)
+        self.deallocate(L_U_sparse)
+        self.deallocate(L_vals_H)
+        self.deallocate(L_H_sparse)
+
+        return self.L0, self.L1, self.L2, self.L3
 
         # compute LHS and RHS
-        print("phi0 LHS")
-        I = np.eye(self.groups.size)
-        B4 = self.B2 ** 2 * I
-        LHS = (9 * B4 * I + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
-                    + self.L3 @ self.L2 @ self.L1 @ self.L0)
-        print("phi0 RHS")
-        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
+#        print("phi0 LHS")
+#        I = np.eye(self.groups.size)
+#        B4 = self.B2 ** 2 * I
+#        LHS = (9 * B4 * I + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
+#                    + self.L3 @ self.L2 @ self.L1 @ self.L0)
+#        print("phi0 RHS")
+        #RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
+#        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.groups)
         # account for bin widths
         #W = np.diag(np.gradient(self.groups))  # lethargy bin widths
         #LHS = W @ LHS @ W
         #RHS = W @ RHS
 
         # matrix properties
-        if properties: self.print_mat_properties(LHS)
+#        if properties: self.print_mat_properties(LHS)
 
         # Ax = b
-        self.phi0 = np.zeros_like(self.groups)
-        self.phi0 = (self.jacobi_parallel(LHS,RHS,self.phi0) 
-                        if self.is_diagonally_dominant(LHS) 
-                            else np.linalg.solve(LHS,RHS))
-        print(self.phi0)
+#        self.phi0 = np.zeros_like(self.groups)
+#        self.phi0 = (self.jacobi_parallel(LHS,RHS,self.phi0) 
+#                        if self.is_diagonally_dominant(LHS) 
+#                            else np.linalg.solve(LHS,RHS))
+#        print(self.phi0)
 
 #        self.phi0 /= np.trapz(self.phi0, x=self.E)
 
@@ -389,11 +378,8 @@ class Sp3:
         # compute LHS and RHS
         LHS = self.L3 @ self.L2 # matrix
         RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
-                @ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
-
-        W = np.diag(np.gradient(self.groups))  # lethargy bin widths
-        LHS = W @ LHS @ W
-        RHS = W @ RHS
+                #@ (self.L0 @ self.phi0 - self.chi)) / 2 # vector
+                @ (self.L0 @ self.phi0 - self.groups)) / 2 # vector
 
         if properties: self.print_mat_properties(LHS)
 
@@ -402,7 +388,6 @@ class Sp3:
         self.phi2 = (self.jacobi_parallel(LHS,RHS,self.phi2) 
                         if self.is_diagonally_dominant(LHS) 
                             else np.linalg.solve(LHS,RHS))
-#        self.phi2 /= np.trapz(self.phi2, x=self.E)
 
         # deallocate
         self.deallocate([LHS,RHS])
@@ -469,7 +454,7 @@ class Sp3:
         plt.title(r'$|\phi_2(E)|$')
         plt.xlabel('E')
         plt.yscale('log')
-        plt.ylabel(r'$\phi$')
+        plt.ylabel(r'$\phi_2$')
         plt.xscale('log')
         plt.grid(True, which='both')
         plt.legend()
@@ -597,52 +582,78 @@ class Sp3:
 
         return sigma_sl
 
+    def calc_phi_tt(self):
+        """
+        Calculate the flux using operators in TT format
+
+        Returns:
+        phi0 and phi2 in TT format
+        """
+        # convert Loss, chi, and scalers to TT
+        self.L0 = self.npy_to_tensor(self.L0)
+        self.L1 = self.npy_to_tensor(self.L1)
+        self.L2 = self.npy_to_tensor(self.L2)
+        self.L3 = self.npy_to_tensor(self.L3)
+        I = np.eye(self.groups.size)
+        B4 = self.B2 ** 2 * I
+        B4 = self.npy_to_tensor(B4)
+        groups = self.npy_to_tensor(self.groups)
+
+        # solve for phi0
+        LHS = (9 * B4 * I + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
+                    + self.L3 @ self.L2 @ self.L1 @ self.L0)
+        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.groups)
+        self.phi0 = np.linalg.solve(LHS,RHS)
+
+        # solve for phi2
+        LHS = self.L3 @ self.L2 
+        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
+                @ (self.L0 @ self.phi0 - self.groups)) / 2 
+        self.phi2 = np.linalg.solve(LHS,RHS)
+
+        return self.phi0, self.phi2
+
+
     def run(self, properties, from_h5):
         """
         Run the complete SP3 calculation process.
         """
+        st = time.time()
         if from_h5 == False:
-            print("Starting phi0 calculation...")
-            st = time.time()
             self.initial_flux()
-            self.calc_phi0(properties)
-            et = time.time()
-            print(f"phi0 calculation: {np.round(et-st,5)}")
-
-            print("Starting phi2 calculation...")
-            self.calc_phi2(properties)
-
-            print("Plotting")
-            st = time.time()
-            self.plot_fluxes()
-            et = time.time()
-            print(f"Plotting Time: {np.round(et-st,5)}")
-
-            print("Starting Phi0 and Phi2 calculation...")
-            self.calc_Phi()
-            assert 0 == 1
-
-            print("Saving Data...")
-            df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
-            df.to_hdf(f"{scratch_dir}/fluxes.h5", key="df", mode="w", format="table")
+            print("Starting phi0 calculation...")
+            self.calc_Ln()
             with h5py.File(f"{scratch_dir}/Ln.h5", "w") as f:
                 f.create_dataset("L0", data=self.L0)
                 f.create_dataset("L1", data=self.L1)
                 f.create_dataset("L2", data=self.L2)
                 f.create_dataset("L3", data=self.L3)
-            print("Data Saved")
-
         else:
             print("Reading Data From File...")
-            df = pd.read_hdf(f"{scratch_dir}/fluxes.h5", key="df")
-            df = df.to_numpy() 
-            self.phi0, self.phi2, self.Phi0, self.Phi2 = df[:, 0], df[:, 1], df[:, 2], df[:, 3]
             with h5py.File(f"{scratch_dir}/Ln.h5", "r") as f:
                 self.L0 = f["L0"][:]
                 self.L1 = f["L1"][:]
                 self.L2 = f["L2"][:]
                 self.L3 = f["L3"][:]
-            print("Data Read!")
+            print("Ln Read! \nSolving for phi in TT")
+        self.phi0, self.phi2 = self.calc_phi_tt() 
+        et = time.time()
+        print(f"phi calculation: {np.round(et-st,5)}")
+
+        print("Plotting")
+        st = time.time()
+        self.plot_fluxes()
+        et = time.time()
+        print(f"Plotting Time: {np.round(et-st,5)}")
+
+        print("Starting Phi0 and Phi2 calculation...")
+        self.calc_Phi()
+
+        print("Saving Data...")
+        df = pd.DataFrame({'phi0': tensor_to_npy(self.phi0), 'phi2': tensor_to_npy(self.phi2), 
+                           'Phi0': tensor_to_npy(self.Phi0), 'Phi2': tensor_to_npy(self.Phi2)})
+        df.to_hdf(f"{scratch_dir}/fluxes.h5", key="df", mode="w", format="table")
+        print("Data Saved")
 
         # Group fission and total cross-sections for moments 0 and 2
         print("Calculating Fission Source and Updated Total / Fission Cross-Sections...")
@@ -839,8 +850,7 @@ class Sp3:
         # loop over rows
         for i in range(A.shape[0]):
             row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  # Sum of non-diagonals
-            if np.abs(A[i, i]) < row_sum:
-                return False
+            if np.abs(A[i, i]) < row_sum: return False
 
         return True
 
@@ -848,8 +858,7 @@ class Sp3:
     def read_sigma_s(l, A):
         """Read only the S{l} dataset from the HDF5 file."""
         my_str = "H" if A == 1 else "U"
-        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "r") as f:
-            return np.array(f[f"sigma_s{l}"])  
+        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "r") as f: return np.array(f[f"sigma_s{l}"])  
 
     @staticmethod
     def deallocate(my_list):
@@ -862,8 +871,7 @@ class Sp3:
         Returns: 
         None
         """
-        for obj in my_list:
-            del obj 
+        for obj in my_list: del obj 
         my_list.clear()  
 
     @staticmethod
@@ -871,12 +879,11 @@ class Sp3:
         """
         Compute scattering cosine matrix mu(u, u') for all g, g' combinations.
         """
-        u = lethargy.reshape(-1, 1)     # (G,1)
-        up = lethargy.reshape(1, -1)    # (1,G)
+        u = lethargy.reshape(1, -1)     
+        up = lethargy.reshape(-1, 1)    
         mu = ((A + 1) / 2) * np.exp((up - u) / 2) - ((A - 1) / 2) * np.exp((u - up) / 2)
-        mu = np.clip(mu, -1, 1)
 
-        return mu
+        return np.clip(mu, -1, 1)
 
     @staticmethod
     def den_to_csr(A):
@@ -905,3 +912,8 @@ class Sp3:
 
         return np.array(vals), np.array(col_ind), np.array(row_ptr)
 
+    @staticmethod
+    def tensor_to_npy(tensor): return tl.to_numpy(tensor)
+
+    @staticmethod
+    def npy_to_tensor(array): return tl.tensor(array)

@@ -1,6 +1,5 @@
 from Sp3 import Sp3
 from setup_sp3 import *
-from scipy.special import legendre
 
 #get data
 print("Reading Data...")
