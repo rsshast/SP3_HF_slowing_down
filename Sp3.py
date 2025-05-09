@@ -22,7 +22,6 @@ class Sp3:
         self.sigma_f   = np.flip(sigma_f) # fission xs's
         self.E         = np.exp(xs_U[:,0]) # energy groups, low to high
         self.chi       = np.flip(chi[:, 1]) # fission spectrum
-        #self.chi       = self.groups # fission spectrum
         self.B2        = B2 # geometric buckling
         self.tol       = 1e-6 # Small value threshold
         self.gridspace = self.groups[1] - self.groups[0]
@@ -31,6 +30,7 @@ class Sp3:
         self.T         = 293 # degrees Kelvin
         self.k         = 8.617e-5  # eV/K (Boltzmann constant)
         self.kT        = self.k * self.T
+        self.g_min_vec = None
 
         # Initialize other attributes
         self.L0   = np.zeros((self.groups.size,self.groups.size))
@@ -382,6 +382,7 @@ class Sp3:
 
         # operator on Phi_n(u)
         M = np.matmul(Linv,Phi)
+        g_min_vec = self.g_min_vec_fn(A)
 
         @staticmethod
         @njit(parallel=True)
@@ -401,7 +402,7 @@ class Sp3:
             
             return D
 
-        D = parallel_coef_d(D,self.g_min_vec,M,self.groups,self.gridspace,Phi)
+        D = parallel_coef_d(D,g_min_vec,M,self.groups,self.gridspace,Phi)
     
         return D
 
@@ -421,6 +422,8 @@ class Sp3:
         Phi = self.Phi0 if n == 0 else self.Phi2
         sigma_new = np.zeros_like(Phi)
 
+        g_min_vec = self.g_min_vec_fn(A)
+
         @staticmethod
         @njit(parallel=True)
         def parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,groups,gridwidth):
@@ -436,7 +439,7 @@ class Sp3:
 
             return sigma_new
 
-        sigma_new = parallel_sigma_upd(Phi,self.g_min_vec,sigma_new,sigma_x,self.groups,self.gridspace)
+        sigma_new = parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,self.groups,self.gridspace)
 
         return sigma_new
 
@@ -461,6 +464,7 @@ class Sp3:
 
         # in integetral, E0 dependence cancels out
         M = np.matmul(sigma_sl,Phi)
+        g_min_vec = self.g_min_vec_fn(A)
 
         @staticmethod
         @njit(parallel=True)
@@ -477,7 +481,7 @@ class Sp3:
                 
             return sigma_sl
 
-        sigma_sl = parallel_sigma_s_upd(Phi,self.g_min_vec,M,self.groups,self.gridspace,sigma_sl)
+        sigma_sl = parallel_sigma_s_upd(Phi,g_min_vec,M,self.groups,self.gridspace,sigma_sl)
 
         return sigma_sl
 
@@ -524,6 +528,19 @@ class Sp3:
                 f.create_dataset("L1", data=self.L1)
                 f.create_dataset("L2", data=self.L2)
                 f.create_dataset("L3", data=self.L3)
+            self.calc_phi_tt() 
+            print(f"phi calculation: {np.round(et-st,5)}")
+            print("Plotting")
+            self.plot_fluxes()
+
+            print("Starting Phi0 and Phi2 calculation...")
+            self.calc_Phi()
+
+            print("Saving Data...")
+            df = pd.DataFrame({'phi0': self.tensor_to_npy(self.phi0), 'phi2': self.tensor_to_npy(self.phi2), 
+                               'Phi0': self.tensor_to_npy(self.Phi0), 'Phi2': self.tensor_to_npy(self.Phi2)})
+            df.to_hdf(f"{scratch_dir}/fluxes.h5", key="df", mode="w", format="table")
+            print("Data Saved")
 
         else:
             print("Reading Data From File...")
@@ -532,25 +549,20 @@ class Sp3:
                 self.L1 = f["L1"][:]
                 self.L2 = f["L2"][:]
                 self.L3 = f["L3"][:]
-            print("Ln Read! \nSolving for phi in TT")
-        self.calc_phi_tt() 
+            print("Ln Read!")
+
+            df = pd.read_hdf(f"{scratch_dir}/fluxes.h5", key="df")
+            self.phi0 = df['phi0'].to_numpy()
+            self.phi0/= np.sum(self.phi0)
+            self.phi2 = df['phi2'].to_numpy()
+            self.phi2/= np.sum(self.phi2)
+            self.Phi0 = df['Phi0'].to_numpy()
+            self.Phi0/= np.sum(self.Phi0)
+            self.Phi2 = df['Phi2'].to_numpy()
+            self.Phi2/= np.sum(self.Phi2)
+            print("Phi Read!")
+
         et = time.time()
-        print(f"phi calculation: {np.round(et-st,5)}")
-
-        print("Plotting")
-        st = time.time()
-        self.plot_fluxes()
-        et = time.time()
-        print(f"Plotting Time: {np.round(et-st,5)}")
-
-        print("Starting Phi0 and Phi2 calculation...")
-        self.calc_Phi()
-
-        print("Saving Data...")
-        df = pd.DataFrame({'phi0': tensor_to_npy(self.phi0), 'phi2': tensor_to_npy(self.phi2), 
-                           'Phi0': tensor_to_npy(self.Phi0), 'Phi2': tensor_to_npy(self.Phi2)})
-        df.to_hdf(f"{scratch_dir}/fluxes.h5", key="df", mode="w", format="table")
-        print("Data Saved")
 
         # Group fission and total cross-sections for moments 0 and 2
         print("Calculating Fission Source and Updated Total / Fission Cross-Sections...")
