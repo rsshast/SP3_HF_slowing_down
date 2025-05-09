@@ -2,7 +2,7 @@ from __init__ import *
 ####################################################################
 # user inputs
 E0 = 1e7 
-gridpoints = 10000
+gridpoints = 25000
 B2 = 1
 NH = 5
 NU = 1
