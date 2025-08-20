@@ -1,7 +1,7 @@
 from __init__ import *
 
 class Sp3:
-    def __init__(self, xs_H, xs_U, sigma_f, chi, B2):
+    def __init__(self, xs_H, xs_U, sigma_f, chi, B2, NH):
         """
         Initialize the calculator with necessary parameters.
 
@@ -31,6 +31,7 @@ class Sp3:
         self.k         = 8.617e-5  # eV/K (Boltzmann constant)
         self.kT        = self.k * self.T
         self.g_min_vec = None
+        self.NH        = NH
 
         # Initialize other attributes
         self.L0   = np.zeros((self.groups.size,self.groups.size))
@@ -106,58 +107,6 @@ class Sp3:
         return (self.groups.size if A == 1 
                 else np.searchsorted(self.groups, self.groups[g] + np.log(1 / self.alpha(A))))
 
-    def compute_scattering(self, g, gp, sigma_s, A, l, mu):
-        """
-        Finds the g' -> g xs for moment l
-
-        Parameters:
-        g (int): incident lethargy group
-        gp (int): outgoing lethargy group
-        sigma_s (vector): 0th order scatter xs
-        A (int): Atomic number
-        l (int): legendre order
-        mu(int): Leg poly of scattering cosine
-
-        Return:
-        float(int): integral value of gtg xs
-        """
-        u_min, up_min = self.groups[g], self.groups[gp]
-
-        u_max  = self.groups[g+1]  if g < self.groups.size - 1  else self.groups[g]
-        up_max = self.groups[gp+1] if gp < self.groups.size - 1 else self.groups[gp]
-        sigma_s_gp = sigma_s[gp]
-
-        def sigma_s_kernel(u, up, sigma_s_gp, alpha):
-            #if alpha == 0: return sigma_s_gp * np.exp(up - u)
-            if alpha == 0: return sigma_s_gp * np.exp(u - up)
-
-            #elif up - np.log(1 / alpha) <= u <= up: return (sigma_s_gp / (1 - alpha)) * np.exp(up - u)
-            elif up - np.log(1 / alpha) <= u <= up: return (sigma_s_gp / (1 - alpha)) * np.exp(u - up)
-
-            return 0
-
-        def numerator_integrand(u, up, mu, l, g, gp, alpha, phi_u):
-            return sigma_s_kernel(u, up, sigma_s_gp, alpha) * mu[l,g,gp] * phi_u[gp] * np.exp(-up)
-#            if (l > 0 and g != gp): return (integrand * np.sum(mu[l,g,g:gp]))
-#            else: return integrand
-            return integrand
-
-        def inner_integral(up, mu, l, g, gp, alpha, phi_u):
-            if alpha > 0:
-                u_lower = max(u_min, up - np.log(1 / alpha))
-                u_upper = min(u_max, up)
-
-            #else: u_lower, u_upper = u_min, up
-            else: u_lower, u_upper = u_min, u_max
-
-            return quad(numerator_integrand, u_lower, u_upper, args=(up, mu, l, g, gp, alpha, phi_u))[0]
-    
-        numerator = quad(inner_integral, up_min, up_max, 
-                        args=(mu, l, g, gp, self.alpha(A), self.p0))[0]
-        denominator = quad(lambda up: self.p0[gp] * np.exp(-up), up_min, up_max)[0]
-    
-        return numerator / denominator if denominator > 0 else 0
-    
     def g_min_vec_fn(self,A):
         g_min_vec = np.zeros_like(self.groups, dtype = int)
         for g in range(self.groups.size): g_min_vec[g] = self.group_bound(A,g)
@@ -187,6 +136,7 @@ class Sp3:
             for gp in range(G):
                 for g in range(self.group_bound(A,gp)):  
                     # use maxwellian to get upscatter contributions
+                    """
                     if g < gp and flip_E[g] < 50: # upscattering at 50 eV
                         kernel = ((1 + self.kT / (2 * A * flip_E[g])) * erf(np.sqrt(A * flip_E[g] / self.kT))
                                     + np.sqrt(self.kT / (np.pi * A * flip_E[g])) * np.exp(-A*flip_E[g] / self.kT))
@@ -197,6 +147,8 @@ class Sp3:
 
                     else:
                         sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * flip_E[g]
+                    """
+                    sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * flip_E[g]
 
         # normalize
         for l in range(self.leg_order):
@@ -212,7 +164,7 @@ class Sp3:
 
         # Save to HDF5
         my_str = "H" if A == 1 else "U"
-        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "w") as f:
+        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}_{self.NH}.h5", "w") as f:
             for l in range(self.leg_order):
                 f.create_dataset(f"sigma_s{l}", data=sigma_gtg[l])
     
@@ -322,6 +274,29 @@ class Sp3:
 
         return Q
 
+    def plot_flux_diff(self,phi1,phi2):
+        # compare the traditional to new method
+        plt.figure()
+        plt.plot(np.flip(self.E),phi1,label='Scattering Source')
+        plt.plot(np.flip(self.E),phi2,label='Sp3')
+        plt.title("Hyperfine Slowing-Down Flux Comparison")
+        plt.ylabel(r"$\phi (E) (n/cm^2)$")
+        plt.xscale('log')
+        plt.xlabel("Energy (eV)")
+        plt.legend()
+        plt.grid(True,which='both')
+        plt.savefig("results/charts/order_comp.png")
+        plt.clf()
+
+        plt.figure()
+        plt.plot(np.flip(self.E),phi1 - phi2)
+        plt.title("Hyperfine Slowing-Down Flux Difference")
+        plt.ylabel(r"$\phi (E) (n/cm^2)$")
+        plt.xscale('log')
+        plt.xlabel("Energy (eV)")
+        plt.grid(True,which='both')
+        plt.savefig("results/charts/flux_difference.png")
+
     def plot_xs_t(self):
         # plot xs's for H and U vs E
         plt.figure()
@@ -346,7 +321,7 @@ class Sp3:
         plt.xscale('log')
         plt.grid(True, which='both')
         plt.legend()
-        plt.savefig(f'results/charts/phi0.png')
+        plt.savefig(f'results/charts/phi0_{self.NH}.png')
 
         plt.figure()
         plt.plot(np.flip(self.E),np.abs(self.phi2),label=r'$\phi_2$')
@@ -357,7 +332,17 @@ class Sp3:
         plt.xscale('log')
         plt.grid(True, which='both')
         plt.legend()
-        plt.savefig(f'results/charts/phi2.png')
+        plt.savefig(f'results/charts/phi2_{self.NH}.png')
+
+        plt.figure()
+        plt.plot(np.flip(self.E),self.phi2,label=r'$\phi_2$')
+        plt.title(r'$\phi_2(E)$')
+        plt.xlabel('E')
+        plt.ylabel(r'$\phi_2$')
+        plt.xscale('log')
+        plt.grid(True, which='both')
+        plt.legend()
+        plt.savefig(f'results/charts/phi2_{self.NH}_lin.png')
 
     def diffusion_coef(self,A,n):
         """
@@ -402,9 +387,7 @@ class Sp3:
             
             return D
 
-        D = parallel_coef_d(D,g_min_vec,M,self.groups,self.gridspace,Phi)
-    
-        return D
+        return parallel_coef_d(D,g_min_vec,M,self.groups,self.gridspace,Phi)
 
     def sigma_update(self,A,sigma_x,n):
         """
@@ -439,9 +422,7 @@ class Sp3:
 
             return sigma_new
 
-        sigma_new = parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,self.groups,self.gridspace)
-
-        return sigma_new
+        return parallel_sigma_upd(Phi,g_min_vec,sigma_new,sigma_x,self.groups,self.gridspace)
 
     def sigma_s_update(self,A,l,n):
         """
@@ -460,7 +441,7 @@ class Sp3:
         Phi = self.Phi0 if n == 0 else self.Phi2
         # read scattering xs's from .h5
         my_str = "H" if A == 1 else "U"
-        sigma_sl = self.read_sigma_s(l,A)
+        sigma_sl = self.read_sigma_s(l,A,self.NH)
 
         # in integetral, E0 dependence cancels out
         M = np.matmul(sigma_sl,Phi)
@@ -481,9 +462,7 @@ class Sp3:
                 
             return sigma_sl
 
-        sigma_sl = parallel_sigma_s_upd(Phi,g_min_vec,M,self.groups,self.gridspace,sigma_sl)
-
-        return sigma_sl
+        return parallel_sigma_s_upd(Phi,g_min_vec,M,self.groups,self.gridspace,sigma_sl)
 
     def calc_phi_tt(self):
         """
@@ -507,12 +486,14 @@ class Sp3:
                     + self.L3 @ self.L2 @ self.L1 @ self.L0)
         RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.groups)
         self.phi0 = np.linalg.solve(LHS,RHS)
+        self.phi0 /= np.sum(self.phi0) # normalize
 
         # solve for phi2
         LHS = self.L3 @ self.L2 
         RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
                 @ (self.L0 @ self.phi0 - self.groups)) / 2 
         self.phi2 = np.linalg.solve(LHS,RHS)
+        self.phi2 /= np.sum(self.phi2) # normalize
 
     def run(self, properties, from_h5):
         """
@@ -523,14 +504,14 @@ class Sp3:
             self.initial_flux()
             print("Starting phi0 calculation...")
             self.calc_Ln()
-            with h5py.File(f"{scratch_dir}/Ln.h5", "w") as f:
+            with h5py.File(f"{scratch_dir}/Ln_{self.NH}.h5", "w") as f:
                 f.create_dataset("L0", data=self.L0)
                 f.create_dataset("L1", data=self.L1)
                 f.create_dataset("L2", data=self.L2)
                 f.create_dataset("L3", data=self.L3)
             self.calc_phi_tt() 
-            print(f"phi calculation: {np.round(et-st,5)}")
-            print("Plotting")
+            print(f"phi calculation: {np.round(time.time()-st,5)}")
+            print("Plotting...")
             self.plot_fluxes()
 
             print("Starting Phi0 and Phi2 calculation...")
@@ -539,32 +520,76 @@ class Sp3:
             print("Saving Data...")
             df = pd.DataFrame({'phi0': self.tensor_to_npy(self.phi0), 'phi2': self.tensor_to_npy(self.phi2), 
                                'Phi0': self.tensor_to_npy(self.Phi0), 'Phi2': self.tensor_to_npy(self.Phi2)})
-            df.to_hdf(f"{scratch_dir}/fluxes.h5", key="df", mode="w", format="table")
+            df.to_hdf(f"{scratch_dir}/fluxes_{self.NH}.h5", key="df", mode="w", format="table")
             print("Data Saved")
 
         else:
+            self.initial_flux()
             print("Reading Data From File...")
-            with h5py.File(f"{scratch_dir}/Ln.h5", "r") as f:
+            with h5py.File(f"{scratch_dir}/Ln_{self.NH}.h5", "r") as f:
                 self.L0 = f["L0"][:]
                 self.L1 = f["L1"][:]
                 self.L2 = f["L2"][:]
                 self.L3 = f["L3"][:]
             print("Ln Read!")
 
-            df = pd.read_hdf(f"{scratch_dir}/fluxes.h5", key="df")
+            df = pd.read_hdf(f"{scratch_dir}/fluxes_{self.NH}.h5", key="df")
             self.phi0 = df['phi0'].to_numpy()
-            self.phi0/= np.sum(self.phi0)
             self.phi2 = df['phi2'].to_numpy()
-            self.phi2/= np.sum(self.phi2)
             self.Phi0 = df['Phi0'].to_numpy()
-            self.Phi0/= np.sum(self.Phi0)
             self.Phi2 = df['Phi2'].to_numpy()
-            self.Phi2/= np.sum(self.Phi2)
             print("Phi Read!")
 
-        et = time.time()
+        self.eval_fluxes()
+        self.eval_xs_t()
+        self.eval_diff_matrix()
+        self.eval_xs_s()
 
-        # Group fission and total cross-sections for moments 0 and 2
+        print("Calculation completed.")
+
+    def print_mat_properties(self,LHS):
+        """
+        prints important matrix properties
+
+        Parameters:
+        LHS (matrix): matrix of interest
+
+        Returns:
+        None
+        """
+        def is_diagonally_dominant(A):
+            """
+            checks if a matrix is diagonally dominant
+    
+            Parameters:
+            A (matrix): matrix in question
+    
+            Returns: 
+            bool: True if matrix is diagonally dominant
+            """
+            # loop over rows
+            for i in range(A.shape[0]):
+                row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  
+                if np.abs(A[i, i]) < row_sum: return False
+    
+            return True
+
+        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
+        print("Determinant of LHS:", np.linalg.det(LHS))
+        print("Log-Condition Number:", np.linalg.cond(LHS))
+        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
+        print("Diagonally dominant: ", is_diagonally_dominant(LHS))
+
+    def eval_fluxes(self):
+        """Compute L2 norm of fluxes"""
+        print("Evaluate Fluxes..")
+        phi0_norm = self.normalize(self.phi0)
+        p0_norm   = self.normalize(self.p0)
+        l2_norm   = self.L2_norm(phi0_norm,p0_norm)
+        print(f"L2 norm: {l2_norm}")
+        self.plot_flux_diff(p0_norm,phi0_norm)
+
+    def eval_xs_t(self):
         print("Calculating Fission Source and Updated Total / Fission Cross-Sections...")
         st = time.time()
         new_xs = {
@@ -578,21 +603,59 @@ class Sp3:
         }
         print(f"Time XS Update: {np.round(time.time() - st, 5)}s")
 
-        # Save xs's to hdf5
-        with h5py.File(f"{scratch_dir}/cross_sections.h5", "w") as f:
-            for key, value in new_xs.items():
-                f.create_dataset(key, data=value, compression="gzip")
+        print("Evaluating Updated XS's")
+        xs_t_H = new_xs["xs_t_H_0"] + new_xs["xs_t_H_2"]
+        xs_t_U = new_xs["xs_t_U_0"] + new_xs["xs_t_U_2"]
+        plt.figure()
+        plt.plot(np.flip(self.E),xs_t_H,label='Flux Weighted')
+        plt.plot(np.flip(self.E),self.sigma_t_H,label='Original')
+        plt.xlabel("E")
+        plt.ylabel(r"$\Sigma_t$")
+        plt.title(f"XS's for {self.groups.size} groups")
+        plt.yscale("log")
+        plt.xscale("log")
+        plt.legend()
+        plt.grid(True, which='both')
+        plt.savefig("updated_xs_t.png")
+        l2_sigma_t_H = self.L2_norm(xs_t_H,self.sigma_t_H)
+        l2_sigma_t_U = self.L2_norm(xs_t_U,self.sigma_t_U)
+        print(f"L2 U: {l2_sigma_t_U}. L2 H: {l2_sigma_t_H}")
 
+        # Save xs's to hdf5
+        with h5py.File(f"{scratch_dir}/cross_sections_{self.NH}.h5", "w") as f:
+            for key, value in new_xs.items(): f.create_dataset(key, data=value, compression="gzip")
+
+    def eval_diff_matrix(self):
+        """Calculate Diffusion coefficients and compare to reference solution"""
         # Generate diffusion coefficients
         st = time.time()
         print("Calculating Diffusion Coefficients for l = 0, l = 2...")
-        with h5py.File(f"{scratch_dir}/diffusion_coefficients.h5", "w") as f:
+        with h5py.File(f"{scratch_dir}/diffusion_coefficients_{self.NH}.h5", "w") as f:
             for prefix, A in [("U", self.AU), ("H", self.AH)]:
                 for l in [0, 2]:
                     D = self.diffusion_coef(A, l)
+                    if np.any(np.isnan(D)): raise ValueError("D must be defined")
                     f.create_dataset(f"D{prefix}_{l}", data=D, compression="gzip", compression_opts=9)
-        print(f"Time D Coef: {np.round(time.time() - st, 5)}s")
+        print(f"Time D Coef (new): {np.round(time.time() - st, 5)}s")
 
+        st = time.time()
+        print("Calculating Transport xs's and expected diffusion coefficients")
+        sigma_s1_U = self.read_sigma_s(l=1, A=self.AU, NH=self.NH)
+        sigma_s3_U = self.read_sigma_s(l=3, A=self.AU, NH=self.NH)
+        D_U_tr = self.diff_matrix(self.sigma_t_U,sigma_s1_U,self.B2)
+        D_U_tr+= self.diff_matrix(self.sigma_t_U,sigma_s3_U,self.B2)
+        D_U = self.read_d_mat(self.NH,prefix = "U",l = 0)
+        D_U+= self.read_d_mat(self.NH,prefix = "U",l = 2)
+        l2_DU = self.L2_norm(D_U,D_U_tr)
+
+        sigma_s1_H = self.read_sigma_s(l=1, A=self.AH, NH=self.NH)
+        D_H_tr = self.diff_matrix(self.sigma_t_H,sigma_s1_H,self.B2)
+        D_H = self.read_d_mat(self.NH,prefix = "H",l = 0)
+        l2_DH = self.L2_norm(D_H,D_H_tr)
+        print(f"Time D Coef (trad): {np.round(time.time() - st, 5)}s")
+        print(f"L2 norm on diffusion coefs for U and H: {l2_DU},{l2_DH}")
+
+    def eval_xs_s(self):
         # generate gtg scattering xs's for all materials
         print("Calculting Updated Group to Group Scattering Cross-Sections...")
         #new_xs_A_l_n
@@ -601,70 +664,14 @@ class Sp3:
         indices  = [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)]
 
         st = time.time()
-        with h5py.File(f"{scratch_dir}/gtg_cross_sections.h5", "w") as f:
+        with h5py.File(f"{scratch_dir}/gtg_cross_sections_{self.NH}.h5", "w") as f:
             for A, name in zip(mat_indx, mat_name):
                 for l, n in indices:
                     xs = self.sigma_s_update(A, l, n)
                     f.create_dataset(f"new_xs_{name}_{l}_{n}", data=xs, compression="gzip", compression_opts=9)
         print(f"Time gtg XS Update: {np.round(time.time() - st, 5)}s")
-        print("Calculation completed.")
 
-    def jacobi_parallel(self,A, b, x0, eps=1e-6, max_iter=1000):
-        """
-        Jacobi iteration for parallel computing
-
-        Parameters:
-        A (matrix): matrix
-        b (vector): vector
-        x0 (vector): solution guess
-
-        Returns:
-        vector: solution
-        """
-        n = len(A)
-        x = x0.copy()
-        x_new = np.zeros_like(x)
-
-        for iteration in range(max_iter):
-            # Parallel computation of new values of x
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [
-                    executor.submit(self.jacobi_update, A, b, x, x_new, i) for i in range(n)
-                ]
-                # Wait for all threads to complete
-                concurrent.futures.wait(futures)
-
-            # Check for convergence (using norm of difference)
-            norm = np.linalg.norm(x_new - x, ord=np.inf)
-            if norm < eps:
-                print(f"Converged in {iteration + 1} iterations")
-                return x_new
-
-            # Update x for the next iteration
-            x[:] = x_new
-
-        print(f"Reached max iterations ({max_iter})")
-
-        return x_new
-
-    def print_mat_properties(self,LHS):
-        """
-        prints important matrix properties
-
-        Parameters:
-        LHS (matrix): matrix of interest
-
-        Returns:
-        None
-        """
-        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
-        print("Determinant of LHS:", np.linalg.det(LHS))
-        print("Log-Condition Number:", np.linalg.cond(LHS))
-        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
-        print("Diagonally dominant: ", self.is_diagonally_dominant(LHS))
-
-    # helper functions and staticmethods
-
+    # helper functions and static methods
     @staticmethod
     def alpha(A):
         """
@@ -697,13 +704,11 @@ class Sp3:
             else: return np.array([0.98, 0.015, 0.004, 0.001])  
     
     @staticmethod
-    def jacobi_update(A, b, x, x_new, i):
-        """
-        helper function for the jacobi loop. Not sure what this is doing
-        """
-        row_sum = np.dot(A[i, :], x)  # Compute the row sum
-        x_new[i] = (b[i] - (row_sum - A[i, i] * x[i])) / A[i, i]  # Update x[i]
-    
+    def tensor_to_npy(tensor): return tl.to_numpy(tensor)
+
+    @staticmethod
+    def npy_to_tensor(array): return tl.tensor(array)
+
     @staticmethod
     @njit(parallel=True)
     def parallel_integrate(groups, S_vals, I_vals, gridwidth, g_min_vec, leg_order):
@@ -735,28 +740,17 @@ class Sp3:
         return np.diag((2 * l + 1) * (sigma - I))
 
     @staticmethod
-    def is_diagonally_dominant(A):
-        """
-        checks if a matrix is diagonally dominant
-
-        Parameters:
-        A (matrix): matrix in question
-
-        Returns: 
-        bool: True if matrix is diagonally dominant
-        """
-        # loop over rows
-        for i in range(A.shape[0]):
-            row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  
-            if np.abs(A[i, i]) < row_sum: return False
-
-        return True
-
-    @staticmethod
-    def read_sigma_s(l, A):
+    def read_sigma_s(l, A, NH):
         """Read only the S{l} dataset from the HDF5 file."""
         my_str = "H" if A == 1 else "U"
-        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}.h5", "r") as f: return np.array(f[f"sigma_s{l}"])  
+        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}_{NH}.h5", "r") as f: 
+            return np.array(f[f"sigma_s{l}"])  
+
+    @staticmethod
+    def read_d_mat(NH,prefix,l):
+        """Read .h5 diffusion matrix for an isotope."""
+        with h5py.File(f"{scratch_dir}/diffusion_coefficients_{NH}.h5", "r") as f: 
+            return np.array(f[f"D{prefix}_{l}"])  
 
     @staticmethod
     def deallocate(my_list):
@@ -811,7 +805,48 @@ class Sp3:
         return np.array(vals), np.array(col_ind), np.array(row_ptr)
 
     @staticmethod
-    def tensor_to_npy(tensor): return tl.to_numpy(tensor)
+    def normalize(vec):
+        assert vec.ndim == 1
+        return vec / np.sum(vec) 
 
     @staticmethod
-    def npy_to_tensor(array): return tl.tensor(array)
+    def L2_norm(A,B):
+        assert A.shape == B.shape
+        return np.linalg.norm(A-B, ord=2)
+
+    @staticmethod
+    def diff_matrix(sigma_t,sigma_s1,B2): # sigma_s1 is a matrix
+
+        # gamma buckling correction factor
+        def gamma_fn(B2,sigma_t): 
+            # takes in the individual xs!
+            if B2 == 0: return 1
+    
+            b = np.sqrt(np.abs(B2)) / sigma_t
+    
+            if B2 > 0: return b*np.arctan(b)/(3*(1-b**(-1)*np.arctan(b)))
+    
+            else:
+                gamma = b*np.log((1+b)/(1-b))
+                gamma /= 3*(-2+b**(-1)*np.log((1+b)/(1-b)))
+                return gamma
+    
+        gamma_mat = np.zeros_like(sigma_t)
+        for i in range(sigma_t.size): gamma_mat[i] = gamma_fn(B2,sigma_t[i])
+
+        @njit(parallel=True)
+        def parallel_sigma_tr(sigma_t,sigma_s1,B2,gamma_mat):
+            # transport cross-section
+            sigma_tr = np.zeros_like(sigma_s1)
+            for i in prange(sigma_s1.shape[0]): # rows p0
+                for j in range(sigma_s1.shape[1]): 
+                    if i == j: sigma_tr[i,j] = gamma_mat[i] * sigma_t[i] - sigma_s1[i,j]
+                    else: sigma_tr[i,j] = - sigma_s1[i,j]
+        
+            return sigma_tr
+
+        # diffusion coef calculation
+        sigma_tr = parallel_sigma_tr(sigma_t,sigma_s1,B2,gamma_mat)
+
+        return np.linalg.inv(3*sigma_tr)
+

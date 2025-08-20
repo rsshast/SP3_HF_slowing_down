@@ -1,17 +1,18 @@
 from __init__ import *
 ####################################################################
 # user inputs
-E0 = 1e7 
-gridpoints = 25000
-B2 = 1
+E0 = 1e7 #eV
+Emin = 1
+gridpoints = 5000
+B2 = .01
 NH = 5
 NU = 1
-properties = True # if true, print matrix properties
-from_h5 = True # if true, load data from h5 files
+properties = False # if true, print matrix properties
+from_h5 = False # if true, load data from h5 files
 scratch_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/h5s"
 #######################get data ##################################
 def get_data(data, gridpoints, N):
-    data = data[(data[:, 0] <= E0) & (data[:, 0] >= 1)]  
+    data = data[(data[:, 0] <= E0) & (data[:, 0] >= Emin)]  
     data[:, 0] = np.log(data[:, 0])
 
     # Define new grid

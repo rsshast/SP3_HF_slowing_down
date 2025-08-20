@@ -11,7 +11,7 @@ XS38 = get_data(XS38,gridpoints,NU)
 sigma_f = get_fission_data(XS38[:,0],sigma_f)
 
 # init class
-sp3 = Sp3(H,XS38,sigma_f,chi,B2)
+sp3 = Sp3(H, XS38, sigma_f, chi, B2, NH)
 print(f"Class initialized. Groups = {gridpoints}")
 #print("Plotting Sigma_t")
 #sp3.plot_xs_t()
