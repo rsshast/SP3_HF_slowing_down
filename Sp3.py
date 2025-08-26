@@ -85,8 +85,7 @@ class Sp3:
                 #subtract off the contribution from lesser lethargy bins
                 if i > g_min:
                     h = i - g_min
-                    scatU -= (sigma_su[h]   / (1 - alpha) * phi[h] 
-                                * self.E[h]   * self.gridspace)
+                    scatU -= (sigma_su[h]   / (1 - alpha) * phi[h] * self.E[h]   * self.gridspace)
 
                 #append to the vector
                 phi[i] = (chi[i] + np.exp(-1 * self.groups[i]) * (scatH + scatU)) / Sigma_R
@@ -123,34 +122,239 @@ class Sp3:
         Returns: 
         3D matrices (leg_order x G x G): gtg scattering xs's 
         """
-        G = self.groups.size
-        sigma_gtg = np.zeros((self.leg_order, G, G))
+        Pl_mu = np.zeros((self.leg_order,self.groups.size,self.groups.size))
+        sigma_gtg = np.zeros_like(Pl_mu)
 
         mu = self.compute_mu_matrix(self.groups, A)  
-        flip_E = np.flip(self.E)
+        for l in range(self.leg_order): Pl_mu[l,:,:] = legendre(l)(mu)
 
+        for i in range(self.groups.size):
+            for j in range(self.groups.size):
+                if i == j: 
+                    Pl_mu[1,i,j] = 0
+                    Pl_mu[2,i,j] = -.5
+                    Pl_mu[3,i,j] = 0
+
+        @njit(parallel=True)
+        def parallel_xs_gen(order, groups, gmax_vec, alpha, sigma_gtg, sigma_s0, Pl_mu):
+            G = groups.size
+            du = groups[1] - groups[0]   
+            for l in range(order):      
+                for gp in prange(G):    
+                    for g in range(gp, gmax_vec[gp]):
+                        sigma_gtg[l,gp,g] = (sigma_s0[gp] * np.exp(groups[gp] - groups[g]) * Pl_mu[l, gp, g] * du
+                                                / (1 - alpha))
+
+                sigma_gtg[l,-1,-1] = sigma_gtg[l,-2,-2] + sigma_gtg[l,-2,-1]
+
+            return sigma_gtg
+
+        sigma_gtg = parallel_xs_gen(self.leg_order, 
+                        self.groups, 
+                        self.g_min_vec_fn(A),
+                        self.alpha(A),
+                        sigma_gtg, 
+                        sigma_s0, 
+                        Pl_mu)
+
+        rowsum = np.zeros_like(self.groups)
+        l2 = 0
+        def rowsum_norm(sigma_gtg,l,rowsum,sigma_s0,l2):
+            xs = sigma_gtg[l,:,:]
+
+            for i in range(rowsum.size):
+                rowsum[i] += np.sum(xs[i,:])
+
+            l2 += np.linalg.norm(rowsum - sigma_s0,ord = 2)
+            return rowsum, l2
+
+        for l in range(self.leg_order):
+            rowsum, l2 = rowsum_norm(sigma_gtg,l,rowsum,sigma_s0,l2)
+        print(f"L2 Norm on xs's: {l2}")
+
+        """
+        # checking mu
+        g_min_vec = self.g_min_vec_fn(A)
+        @njit(parallel=True)
+        def check_mu(mu,g_min_vec):
+            print("checking mu")
+            for i in prange(mu.shape[0]):
+                for j in range(i,g_min_vec[i]):
+                    if np.abs(mu[i,j]) > 1: raise ValueError(f"Mu[{i,j}] is beyond range. {mu[i,j]}")
+            print("mu checked")
+        check_mu(mu,g_min_vec)
+        def scattering_legendre_moments(A, sigma_s, npts=2000):
+            #Numerically compute sigma_s0..sigma_s3 for isotropic scattering in CM.
+            #Stable even for very heavy targets.
+            #
+            #Parameters
+            #----------
+            #A : float
+            #    Target-to-neutron mass ratio
+            #sigma_s : float or ndarray
+            #    Scattering cross section [barns] (incident group or energy)
+            #npts : int
+            #    Number of quadrature points for integration (default 2000)
+            #    
+            #Returns
+            -------
+            sigma_s0, sigma_s1, sigma_s2, sigma_s3
+            # Gauss-Legendre quadrature points over mu_cm in [-1,1]
+            mu_cm, w = np.polynomial.legendre.leggauss(npts)
+            
+            # transform to lab cosine
+            def mu_lab(mu): return mu if A == 1 else (mu + 1 / A) / (np.sqrt(1 + 1 / (A * A) + 2 * mu / A))
+        
+            muL = mu_lab(mu_cm)
+            P0 = np.ones_like(muL)
+            P1 = muL
+            P2 = 0.5*(3*muL**2 - 1)
+            P3 = 0.5*(5*muL**3 - 3*muL)
+            
+            # integrate each moment, factor 0.5 because CM distribution is isotropic: (1/2) over mu_cm
+            mom0 = 0.5*np.sum(w*P0)
+            mom1 = 0.5*np.sum(w*P1)
+            mom2 = 0.5*np.sum(w*P2)
+            mom3 = 0.5*np.sum(w*P3)
+
+            # scale by (2l+1) to convert to sigma_sl
+            sigma_s0 = sigma_s * mom0 * 1     
+            sigma_s1 = sigma_s * mom1 * 3   
+            sigma_s2 = sigma_s * mom2 * 5
+            sigma_s3 = sigma_s * mom3 * 7
+
+            sigma_s0 = np.clip(sigma_s0,0,np.max(sigma_s0))
+            sigma_s1 = np.clip(sigma_s1,0,np.max(sigma_s0))
+            sigma_s2 = np.clip(sigma_s2,0,np.max(sigma_s0))
+            sigma_s3 = np.clip(sigma_s3,0,np.max(sigma_s0))
+
+            return sigma_s0, sigma_s1, sigma_s2, sigma_s3
+
+        xs_0, xs_1, xs_2, xs_3 = scattering_legendre_moments(A,sigma_s0)
+        sigma_sl = np.column_stack((xs_0,xs_1,xs_2,xs_3))
+        """
+        """
+        #@njit(parallel=True)
+        def parallel_xs_gen(order, groups, sigma_gtg, alpha, sigma_sl, Pl_mu, flip_E, sigma_s0, kT, A):
+            G = groups.size
+            du = np.empty(G, dtype=float)
+            du = groups[1:] - groups[:-1]
+            max_jump = np.inf if alpha == 0 else np.log(1.0/alpha)
+            tiny = 1e-30
+            for l in range(order):                 
+                for gp in range(G): # incident 
+                    rowsum = 0.0
+
+                    for g in range(G): # outgoing
+                        tmp = 0.0
+
+                        # Downscatter (g >= gp) 
+                        if g >= gp and (alpha == 0 or g < gp + int(max_jump/du_mean) + 1):
+                            w = np.exp(groups[gp] - groups[g])   
+                            tmp += w * Pl_mu[l, gp, g] * du[g]
+        
+                        # Upscatter (below 50 eV)
+                        if g < gp and flip_E[g] < 50.0:
+                            E = flip_E[g]
+                            arg = np.sqrt(A * E / kT)
+                            kernel = ((1 + kT / (2 * A * E)) * math.erf(arg)
+                                      + np.sqrt(kT / (np.pi * A * E)) * np.exp(-A * E / kT))
+                            tmp += Pl_mu[l, gp, g] * sigma_s0[g] * kernel
+        
+                        sigma_gtg[l, gp, g] = tmp
+                        rowsum += tmp
+        
+                    # Normalize row to sigma_sl[gp,l] 
+                    scale = 0 if rowsum < tiny else sigma_sl[gp, l] / rowsum
+                    for g in range(G): sigma_gtg[l, gp, g] *= scale
+        
+            return sigma_gtg
+        sigma_gtg = parallel_xs_gen(self.leg_order,
+                                    self.groups,
+                                    sigma_gtg,
+                                    self.alpha(A),
+                                    sigma_sl,
+                                    Pl_mu,
+                                    np.flip(self.E),
+                                    sigma_s0,
+                                    self.kT,
+                                    A,)
+        print(sigma_gtg[0,:10,:10])
+        print(sigma_gtg[1,:10,:10])
+        print(sigma_gtg[2,:10,:10])
+        print(sigma_gtg[3,:10,:10])
+        @njit(parallel=True)
+        def parallel_xs_gen(order, groups, sigma_gtg, alpha, sigma_sl, Pl_mu):
+            G = groups.size
+            du = groups[1:] - groups[:-1]           # lethargy bin widths (length G)
+            du = np.append(du, du[-1])
+            du_mean = np.mean(du)
+            max_jump = np.inf if alpha == 0 else np.log(1.0/alpha)
+            tiny = 1e-30
+            for l in range(order):                    # l = 0..L
+                for gp in prange(G):                  # incident bin
+                    # find allowed outgoing band: u_g - u_gp in [0, ln(1/alpha)]
+                    gmax = min(G, gp + int(np.floor(max_jump/du_mean)) + 1) if alpha != 0 else G 
+        
+                    # unnormalized row build
+                    rowsum = 0.0
+                    for g in range(gp, gmax):
+                        w = np.exp((groups[gp] - groups[g]))      
+                        #w = np.exp(-(groups[gp] - groups[g]))      
+                        tmp = w * Pl_mu[l, gp, g] * du[g]          # midpoint rule
+                        sigma_gtg[l, gp, g] = tmp
+                        rowsum += tmp
+
+                    scale = sigma_sl[gp,l] / rowsum if rowsum > tiny else 0
+                    #scale = (2*l + 1) * sigma_sl[gp,l] / rowsum if rowsum > tiny else 0
+
+                    for g in range(gp, gmax): sigma_gtg[l, gp, g] *= scale
+
+                sigma_gtg[l,-1,-1] = sigma_gtg[l,-2,-2] + sigma_gtg[l,-2,-1]
+
+            return sigma_gtg
+
+        sigma_gtg = parallel_xs_gen(self.leg_order,
+                                    self.groups,
+                                    sigma_gtg,
+                                    self.alpha(A),
+                                    sigma_sl,
+                                    Pl_mu,)
+        @njit(parallel=True)
+        def parallel_xs_gen(order,groups,g_min_vec,sigma_gtg,alpha,sigma_s0,Pl_mu):
+            for l in range(order):
+                for gp in prange(groups.size):
+                    for g in range(gp,g_min_vec[gp]):
+                        sigma_gtg[l,gp,g] = ((np.exp(groups[gp] - groups[g])) / (1 - alpha) * 
+                                            (sigma_s0[gp] * Pl_mu[l,gp,g]))
+        
+            return sigma_gtg
+
+        sigma_gtg = parallel_xs_gen(self.leg_order,
+                                    self.groups,
+                                    self.g_min_vec_fn(A),
+                                    sigma_gtg,
+                                    self.alpha(A),
+                                    sigma_s0,
+                                    Pl_mu,)
         # UPSCATTER INCLUDED
         for l in range(self.leg_order):
             P_l_mu = legendre(l)(mu)
     
             for gp in range(G):
-                for g in range(self.group_bound(A,gp)):  
+                for g in range(gp, self.group_bound(A,gp)):  
                     # use maxwellian to get upscatter contributions
-                    """
-                    if g < gp and flip_E[g] < 50: # upscattering at 50 eV
-                        kernel = ((1 + self.kT / (2 * A * flip_E[g])) * erf(np.sqrt(A * flip_E[g] / self.kT))
-                                    + np.sqrt(self.kT / (np.pi * A * flip_E[g])) * np.exp(-A*flip_E[g] / self.kT))
-                        sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * kernel
+                    #if gp <= g and flip_E[g] < 50: # upscattering at 50 eV
+#                    if flip_E[g] < 50: # upscattering at 50 eV
+#                        kernel = ((1 + self.kT / (2 * A * flip_E[g])) * erf(np.sqrt(A * flip_E[g] / self.kT))
+#                                    + np.sqrt(self.kT / (np.pi * A * flip_E[g])) * np.exp(-A*flip_E[g] / self.kT))
+#                        sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * kernel
 
-                    elif gp > g and flip_E[g] > 50: # no upscatter contribution
-                        sigma_gtg[l,gp,g] = 0
+#                    elif gp > g and flip_E[g] > 50: sigma_gtg[l,gp,g] = 0 # no upscatter contribution
 
-                    else:
-                        sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * flip_E[g]
-                    """
-                    sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * flip_E[g]
+#                    else: sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[g] * self.p0[g] * flip_E[g]
+                    sigma_gtg[l,gp,g] = P_l_mu[gp,g] * sigma_s0[gp] * self.p0[g] * (flip_E[gp] - flip_E[g]) 
 
-        # normalize
         for l in range(self.leg_order):
             P_l_mu = legendre(l)(mu)
             for g in range(G):
@@ -160,7 +364,37 @@ class Sp3:
                 target = sigma_s0[g] * self.xs_fraction(flip_E[g], A)[l]
                 sigma_gtg[l,g,:] *= target/norm if norm > self.tol else 0
 
-        sigma_gtg[sigma_gtg <= self.tol] = 0.0
+        row_sum = np.zeros_like(sigma_s0)
+        for n in range(self.leg_order): row_sum += np.sum(sigma_gtg[n,:,:], axis = 1)
+        print(row_sum-sigma_s0)
+        norm = self.L2_norm(sigma_s0,row_sum)
+        print(f'Norm {norm}')
+        """
+        plt.figure(figsize=(6, 5))
+        im = plt.imshow(
+            sigma_gtg[0, :, :],
+            cmap='viridis',
+            origin='upper',
+            norm=LogNorm()
+        )
+        plt.colorbar(im, label=r'$\Sigma_{gtg}$') 
+        plt.title("Scattering Xs's")
+        #plt.show()
+        plt.savefig(f'results/charts/sigma_gtg_{A}.png')
+        plt.close()
+        plt.clf()
+        
+        plt.figure()
+        plt.plot(np.flip(self.E),sigma_s0,label = 'sigma_s0')
+        plt.plot(np.flip(self.E),rowsum,label = 'sigma_gtg')
+        plt.xscale('log')
+        plt.yscale('log')
+        plt.legend()
+        plt.savefig(f"results/charts/parallel_xs_gtg_{A}.png")
+        #plt.show()
+        plt.close()
+        plt.clf()
+#        sigma_gtg[sigma_gtg <= self.tol] = 0.0
 
         # Save to HDF5
         my_str = "H" if A == 1 else "U"
@@ -229,16 +463,19 @@ class Sp3:
         L_vals_U  = self.build_Ln(self.AU,self.sigma_s_U,self.sigma_t_U)
         # send to csr to save memory
         L_U_sparse = [csr_matrix(matrix) for matrix in L_vals_U]
+
         print("H-1 Loss Operators")
         L_vals_H = self.build_Ln(self.AH,self.sigma_s_H,self.sigma_t_H)
         # send to csr to save memory
         L_H_sparse = [csr_matrix(matrix) for matrix in L_vals_H]
+
         print(f"Loss Matrices Computed in {np.round(time.time() - t1, 5)}s")
 
         # do sum on csr
         sparse_sum = [L_U_sparse[i] + L_H_sparse[i] for i in range(len(L_U_sparse))]
         # reconstruct the full matrix
         self.L0, self.L1, self.L2, self.L3 = [L_vals_U[i] + L_vals_H[i] for i in range(4)]
+
         self.deallocate(L_vals_U)
         self.deallocate(L_U_sparse)
         self.deallocate(L_vals_H)
@@ -484,14 +721,14 @@ class Sp3:
         # solve for phi0
         LHS = (9 * B4 * I + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) * self.L0) 
                     + self.L3 @ self.L2 @ self.L1 @ self.L0)
-        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.groups)
+        RHS = ((self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi)
         self.phi0 = np.linalg.solve(LHS,RHS)
         self.phi0 /= np.sum(self.phi0) # normalize
 
         # solve for phi2
         LHS = self.L3 @ self.L2 
-        RHS = (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
-                @ (self.L0 @ self.phi0 - self.groups)) / 2 
+        RHS = .5 * (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) 
+                @ (self.L0 @ self.phi0 - self.chi))  
         self.phi2 = np.linalg.solve(LHS,RHS)
         self.phi2 /= np.sum(self.phi2) # normalize
 
@@ -500,8 +737,8 @@ class Sp3:
         Run the complete SP3 calculation process.
         """
         st = time.time()
+        self.initial_flux()
         if from_h5 == False:
-            self.initial_flux()
             print("Starting phi0 calculation...")
             self.calc_Ln()
             with h5py.File(f"{scratch_dir}/Ln_{self.NH}.h5", "w") as f:
@@ -524,7 +761,6 @@ class Sp3:
             print("Data Saved")
 
         else:
-            self.initial_flux()
             print("Reading Data From File...")
             with h5py.File(f"{scratch_dir}/Ln_{self.NH}.h5", "r") as f:
                 self.L0 = f["L0"][:]
@@ -541,44 +777,12 @@ class Sp3:
             print("Phi Read!")
 
         self.eval_fluxes()
+        assert 0 == 1
         self.eval_xs_t()
         self.eval_diff_matrix()
         self.eval_xs_s()
 
         print("Calculation completed.")
-
-    def print_mat_properties(self,LHS):
-        """
-        prints important matrix properties
-
-        Parameters:
-        LHS (matrix): matrix of interest
-
-        Returns:
-        None
-        """
-        def is_diagonally_dominant(A):
-            """
-            checks if a matrix is diagonally dominant
-    
-            Parameters:
-            A (matrix): matrix in question
-    
-            Returns: 
-            bool: True if matrix is diagonally dominant
-            """
-            # loop over rows
-            for i in range(A.shape[0]):
-                row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  
-                if np.abs(A[i, i]) < row_sum: return False
-    
-            return True
-
-        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
-        print("Determinant of LHS:", np.linalg.det(LHS))
-        print("Log-Condition Number:", np.linalg.cond(LHS))
-        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
-        print("Diagonally dominant: ", is_diagonally_dominant(LHS))
 
     def eval_fluxes(self):
         """Compute L2 norm of fluxes"""
@@ -616,7 +820,7 @@ class Sp3:
         plt.xscale("log")
         plt.legend()
         plt.grid(True, which='both')
-        plt.savefig("updated_xs_t.png")
+        plt.savefig("results/charts/updated_xs_t.png")
         l2_sigma_t_H = self.L2_norm(xs_t_H,self.sigma_t_H)
         l2_sigma_t_U = self.L2_norm(xs_t_U,self.sigma_t_U)
         print(f"L2 U: {l2_sigma_t_U}. L2 H: {l2_sigma_t_H}")
@@ -715,11 +919,9 @@ class Sp3:
         """
         Helper function to perform the integration in parallel.
         """
-        for i in prange(groups.size):
-            g_min = g_min_vec[i]
-    
-            for j in range(i, g_min):
-                for l in range(leg_order):
+        for l in range(leg_order):
+            for i in prange(groups.size):
+                for j in range(i, g_min_vec[i]):
                     val = S_vals[l, i, j]
                     if np.isfinite(val):
                         I_vals[l][i] += val * gridwidth
@@ -767,21 +969,45 @@ class Sp3:
         my_list.clear()  
 
     @staticmethod
+    def print_mat_properties(LHS):
+        """
+        prints important matrix properties
+        Parameters: LHS (matrix): matrix of interest
+        """
+        def is_diagonally_dominant(A):
+            """
+            checks if a matrix is diagonally dominant
+            Parameters: A (matrix): matrix in question
+    
+            Returns: 
+            bool: True if matrix is diagonally dominant
+            """
+            # loop over rows
+            for i in range(A.shape[0]):
+                row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])  
+                if np.abs(A[i, i]) < row_sum: return False
+    
+            return True
+
+        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
+        print("Determinant of LHS:", np.linalg.det(LHS))
+        print("Log-Condition Number:", np.linalg.cond(LHS))
+        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
+        print("Diagonally dominant: ", is_diagonally_dominant(LHS))
+
+    @staticmethod
     def compute_mu_matrix(lethargy, A):
         """
         Compute scattering cosine matrix mu(u, u') for all g, g' combinations.
         """
         u = lethargy.reshape(1, -1)     
         up = lethargy.reshape(-1, 1)    
-        mu = ((A + 1) / 2) * np.exp((up - u) / 2) - ((A - 1) / 2) * np.exp((u - up) / 2)
-
-        return np.clip(mu, -1, 1)
+        return ((A + 1) / 2) * np.exp((up - u) / 2) - ((A - 1) / 2) * np.exp((u - up) / 2)
 
     @staticmethod
     def den_to_csr(A):
         """
         convert a dense matrix to csr format
-
         Parameters:
         A (matrix): matrix in dense format
 
@@ -816,7 +1042,7 @@ class Sp3:
 
     @staticmethod
     def diff_matrix(sigma_t,sigma_s1,B2): # sigma_s1 is a matrix
-
+        """Traditional diffusion matrix calculation"""
         # gamma buckling correction factor
         def gamma_fn(B2,sigma_t): 
             # takes in the individual xs!

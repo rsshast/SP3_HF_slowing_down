@@ -3,7 +3,7 @@ from __init__ import *
 # user inputs
 E0 = 1e7 #eV
 Emin = 1
-gridpoints = 5000
+gridpoints = 5000 
 B2 = .01
 NH = 5
 NU = 1
