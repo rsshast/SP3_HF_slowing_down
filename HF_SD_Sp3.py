@@ -12,7 +12,7 @@ class Sp3:
         self.data_dir = data_dir
         self.save_dir = "results/data/"
         self.B2 = B2
-        self.tol = 1e-7 # loop break condition
+        self.tol = 1e-8 # loop break condition
         self.E0 = 1e7
         self.Emin = 1e-2
         self.nbins = nbins + 1
@@ -26,14 +26,15 @@ class Sp3:
         chi35 = pd.read_csv(f'{data_dir}chi_u235.txt', sep = '\t',header = 0)
         H1 = pd.read_csv(f'{data_dir}xs_h1_T293k.txt', sep  = '\t', header = 0)
         U238 = pd.read_csv(f'{data_dir}xs_u238_T293k.txt',sep  = '\t', header = 0)
+        sigma_f = pd.read_csv(f'{data_dir}xs_u238_fission.csv', sep = ',', dtype=float).to_numpy()
 
         chi = np.array([chi35['E'],chi35['chi']]).T
         H = np.array([H1['E'],H1['sigma_t'],H1['sigma_s']]).T
         XS38 = np.array([U238['E'],U238['sigma_t'],U238['sigma_s']]).T
-        chi = self.get_data(chi,self.nbins,self.NU)
-        H = self.get_data(H,self.nbins,self.NH)
+        chi = self.get_data(chi,self.nbins)
+        H = self.get_data(H,self.nbins)
         H *= self.NH
-        XS38 = self.get_data(XS38,self.nbins,self.NU)
+        XS38 = self.get_data(XS38,self.nbins)
         self.chi = chi[:,1]
         self.boundaries = XS38[:,0]
         self.Evec = self.E0 * np.exp(-self.boundaries)
@@ -41,6 +42,8 @@ class Sp3:
         self.sig_s0_U = XS38[:,2]
         self.sig_t_H = H[:,1]
         self.sig_s0_H = H[:,2]
+        self.sigma_f = self.get_data(sigma_f,self.nbins)[:,1]
+
         G = self.boundaries.size
         self.phi0 = np.zeros((G-1))
         self.phi2 = np.zeros_like(self.phi0)
@@ -53,8 +56,9 @@ class Sp3:
         self.L3 = np.zeros_like(self.L0)
         self.chart_dir = "results/charts/"
         self.save_data = True
+        self.few_groups = 8
 
-    def get_data(self,data, gridpoints, N):
+    def get_data(self,data, gridpoints):
         data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
         data[:, 0] = np.log(self.E0 / data[:, 0])
 
@@ -71,30 +75,29 @@ class Sp3:
 
     def initial_flux(self):
         """Compute the initial scalar flux using scattering source method nuclear engineering handbook method"""
+        # Problem setup
         u = self.boundaries                   
         du = u[1] - u[0]
         alphaU = self.alpha_fn(self.AU)
         inv1ma = 1.0 / (1.0 - alphaU)
         lga = -np.log(alphaU)                
-    
-        # --- Cross sections and fission source on SAME grid ---
         StH, SsH = self.sig_t_H, self.sig_s0_H
         StU, SsU = self.sig_t_U, self.sig_s0_U
         chi = self.chi
     
-        # --- Precompute exponentials ---
         expu = np.exp(u)
         expm = 1.0 / expu
         phi = np.zeros_like(u, dtype=float)
         scatH = 0.0
         scatU = 0.0    
-        # --- Convert lethargy window (lga) to bin count for uranium scattering ---
         gmax = int(np.floor(lga / du))
         f = (lga / du) - gmax  # fractional overlap for partial bin
         
-        for i in range(1, u.size):
+        for i in range(u.size):
+        #for i in range(1, u.size):
             # Removal cross section
             Sigma_R = (StH[i] + StU[i]) - du * (SsU[i] * inv1ma) - du * SsH[i]
+            if i == 0: phi[i] = chi[i] / Sigma_R
     
             # Add scattering sources from previous bin
             e_im1 = expu[i - 1]
@@ -110,7 +113,6 @@ class Sp3:
             # Update flux (extra exp(-u_i) factor per handbook formulation)
             phi[i] = (chi[i] + expm[i] * (scatH + scatU)) / Sigma_R
     
-        # --- Plot result ---
         plt.figure()
         plt.plot(self.Evec, phi, label=r'$\phi_0$')
         plt.title(r'Initial Scalar Flux $\phi_0(E)$')
@@ -215,13 +217,19 @@ class Sp3:
         plt.clf()
 
         plt.figure()
-        plt.plot(self.Evec[:-1],self.phi0 - self.p0[:-1])
+        plt.plot(self.Evec[:-1],(self.phi0 - self.p0[:-1]) / self.p0[:-1])
         plt.title("Hyperfine Slowing-Down Flux Difference")
-        plt.ylabel(r"$\phi (E) (n/cm^2)$")
+        plt.ylabel("% Difference")
         plt.xscale('log')
         plt.xlabel("Energy (eV)")
         plt.grid(True,which='both')
         plt.savefig(f"{self.chart_dir}flux_difference.png")
+
+        # evaluate fluxes
+        L2 = self.L2_norm(self.phi0,self.p0[:-1])
+        print(f"L2 norm on phi0 and reference, = {L2}")
+        L2 = self.L2_norm(self.Phi0,self.p0[:-1])
+        print(f"L2 norm on Phi0 and reference, = {L2}")
 
     def gtg_and_line_plots(self,sigma_gtg,A,sigma_s0,rowsum):
         print("Plot Sigma_sl")
@@ -253,22 +261,28 @@ class Sp3:
         self.L2 += self._Ln(2, sigma_t, sigma_gtg[2,:,:])
         self.L3 += self._Ln(3, sigma_t, sigma_gtg[3,:,:])
 
-    def calc_phi(self):
+    def calc_phi(self, properties = False):
         # phi0
         print('Calc phi')
         B4 = self.B2 * self.B2
         LHS = (9 * B4 + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) @ self.L0)
                 + self.L3 @ self.L2 @ self.L1 @ self.L0)
         RHS = (self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi[:-1]
+        if properties:
+            print("phi0 matrix properties")
+            self.print_mat_properties(LHS)
         self.phi0 = np.linalg.solve(LHS,RHS)
 
         #phi2
         LHS = self.L3 @ self.L2
+        if properties:
+            print("phi2 matrix properties")
+            self.print_mat_properties(LHS)
         RHS = .5 * (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3)
                 @ (self.L0 @ self.phi0 - self.chi[:-1]))
         self.phi2 = np.linalg.solve(LHS,RHS)
 
-    def calc_Phi(self):
+    def calc_Phi(self): 
         self.Phi0 = self.phi0 + 2 * self.phi2
         self.Phi2 = self.phi2
 
@@ -286,8 +300,10 @@ class Sp3:
 
     def save_fluxes(self):
         print("Saving Data...")
-        df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 'Phi0': self.Phi0, 'Phi2': self.Phi2})
-        df.to_hdf(f"{self.save_dir}/fluxes_{self.NH}.h5", key="df", mode="w", format="table")
+        df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 
+            'Phi0': self.Phi0, 'Phi2': self.Phi2,
+            'phi_ref': self.p0[:-1]})
+        df.to_hdf(f"{self.save_dir}fluxes_{self.NH}.h5", key="df", mode="w", format="table")
 
     def run(self):
         self.initial_flux()
@@ -300,41 +316,74 @@ class Sp3:
             self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H)
             self.transpose_and_save_Ln()
             self.calc_phi()
+            self.calc_Phi()
             self.plot_fluxes()
             self.plot_flux_diff()
-            self.calc_Phi()
             if self.save_data == True: self.save_fluxes()
 
+        print("Few Group Cross-Sections")
+        self.phi_weighted_sigma(self.sig_t_U,self.AU, "total")
+        self.phi_weighted_sigma(self.sig_t_H,self.AH, "total")
+        self.phi_weighted_sigma(self.sigma_f,self.AU, "fission")
+
+    def phi_weighted_sigma(self, sigma, A,key):
+        # start generating few group xs's
+        def sigma_vec_few_grp(sigma, phi, group_idx, E):
+            few_grp_xs = np.zeros((group_idx.size - 1))
+            # ensure sigma and phi are the same size
+            assert sigma.size == phi.size
+    
+            for i in range(few_grp_xs.size):
+                stt, stp = group_idx[i], group_idx[i+1]
+                few_grp_xs[i] = np.trapz(sigma[stt:stp] * phi[stt:stp], E[stt:stp]) / np.trapz(phi[stt:stp], E[stt:stp])
+    
+            return few_grp_xs
+
+        fg_idx = np.linspace(0,self.phi0.size,self.few_groups+1, dtype=int)
+        E_ave = np.zeros((self.few_groups))
+        u_ave = np.zeros_like(E_ave)
+        sigma_fg = np.zeros_like(E_ave)
+        for i in range(self.few_groups): 
+            idx_ave = int(.5 * (fg_idx[i] + fg_idx[i+1]))
+            E_ave[i] = self.Evec[idx_ave]
+            u_ave[i] = self.boundaries[idx_ave]
+
         # Uranium flux weighted xs's
-        sigma_sl_0_U, sigma_sl_2_U = self.flux_weighted_sigma_sl(self.AU,self.sig_s0_U)
-        
-        # Hydrogen flux weighted xs's
-        sigma_sl_0_H, sigma_sl_2_H = self.flux_weighted_sigma_sl(self.AU,self.sig_s0_U)
+        sigma_fg = sigma_vec_few_grp(sigma[:-1], self.phi0, fg_idx, self.Evec[:-1])
+        sigma_fg_0 = sigma_vec_few_grp(sigma[:-1], self.Phi0, fg_idx, self.Evec[:-1])
+        sigma_fg_2 = sigma_vec_few_grp(sigma[:-1], self.Phi2, fg_idx, self.Evec[:-1])
+        print(f"L2 norm on phi0 and Phi0 weighted xs's for A={A}, {key}: {self.L2_norm(sigma_fg,sigma_fg_0)}")
+
+        # save data to .h5
+        df = pd.DataFrame({
+            "Energy": E_ave,
+            "Lethargy": u_ave,
+            "Sigma T Average": sigma_fg,
+            "Sigma T Phi0": sigma_fg_0,
+            "Sigma T Phi2": sigma_fg_2,
+        })
+
+        df.to_csv(f"{self.save_dir}fg_xs_{key}_A{A}_NH{self.NH}.csv")
 
     def flux_weighted_sigma_sl(self,A,sigma_s):
-        sigma_sl_0 = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
-                                        self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
-                                        self.alpha_fn(A), self.E0, self.tol,self.Phi0)
-
-        sigma_sl_2 = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
-                                        self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
-                                        self.alpha_fn(A), self.E0, self.tol,self.Phi2)
+        return 0
 
     def read_data(self):
         print("Reading Data From File...")
+        df = pd.read_hdf(f"{self.save_dir}fluxes_{self.NH}.h5", key="df")
+        self.phi0 = df['phi0'].to_numpy()
+        self.phi2 = df['phi2'].to_numpy()
+        self.Phi0 = df['Phi0'].to_numpy()
+        self.Phi2 = df['Phi2'].to_numpy()
+        self.p0   = df['phi_ref'].to_numpy()
+        print("Phi Read!")
+
         with h5py.File(f"{self.save_dir}Ln_{self.NH}.h5", "r") as f:
             self.L0 = f["L0"][:]
             self.L1 = f["L1"][:]
             self.L2 = f["L2"][:]
             self.L3 = f["L3"][:]
         print("Ln Read!")
-
-        df = pd.read_hdf(f"{self.save_dir}fluxes_{self.NH}.h5", key="df")
-        self.phi0 = df['phi0'].to_numpy()
-        self.phi2 = df['phi2'].to_numpy()
-        self.Phi0 = df['Phi0'].to_numpy()
-        self.Phi2 = df['Phi2'].to_numpy()
-        print("Phi Read!")
 
     @staticmethod
     def alpha_fn(A): return ((A - 1.0)/(A + 1.0)) ** 2
