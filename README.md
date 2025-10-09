@@ -1,4 +1,4 @@
-# Continuous Multigroup SpN Calculation in Slowing Down Region
+# Sp3 Hyper-fine Group Slowing Down Calculation
 Paper available upon request, please email Ravi at rsshast@umich.edu
 
 Ravi Shastri, Brian Kiedrowski
