@@ -1,7 +1,7 @@
 # Sp3 Hyper-fine Group Slowing Down Calculation
 Paper available upon request, please email Ravi at rsshast@umich.edu
 
-Ravi Shastri, Brian Kiedrowski
+Contributors: Ravi Shastri, Brian Kiedrowski
 
 Discritization over angle and then energy to find the slowing down flux spectrum. 
 Then, calculate the fission source, create new flux weighted cross-sections (xs's) and diffusion coefficients. 
