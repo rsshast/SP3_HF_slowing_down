@@ -1,7 +1,5 @@
 # Continuous Multigroup SpN Calculation in Slowing Down Region
-Paper available upon request, 
-
-rsshast@umich.edu
+Paper available upon request, please email Ravi at rsshast@umich.edu
 
 Ravi Shastri, Brian Kiedrowski
 
@@ -10,26 +8,21 @@ Then, calculate the fission source, create new flux weighted cross-sections (xs'
 
 Usage:
 
-__init__.py contains:
-  * Modules required to run the code
+Data contains:
+  * Cross section data for
+    * Hydrogen
+    * Uranium
+  * Fission Spectrum, $\chi(E)$
 
-setup.py contains:
-  * energy group discritization and corresponding interpolated cross sections
-  * Number Densities
-  * Option to generate fresh data or load from .h5 files. 
-  
-Sp3.py Method contains:
-  * methods for calculating scattering and loss operators
-  * methods for calculating flux moments
-  * methods for calculating new group cross sections and diffusion coefficients
-  
-run_sp3.py contains:
-  * gets the data
-  * plots the cross-sections
-  * sp3.run()
-
-plot_scat_ranges.py contains: 
-  * function to visualize the group bound for the scattering integral
+HF_SD_Sp3.py contains:
+  * Required modules (numpy, pandas, matplotlib, hdf5)
+  * Reading data from Data
+  * Flux calculation from Scattering Source
+  * Linearly Interpolate (in lethargy) data on hyperfine grid. User sets the number of gridpoints.
+  * Generate $\Sigma_{gtg}^{sl}$ for l = [0,1,2,3]
+  * Solve for $\phi_0$ and $\phi_2$
+  * Update cross sections with accurate flux weighting
+  * Calculate Diffusion Coefficients
 
 Completed Work:
   * Transformed from Energy to Lethargy Discretization in Energy
@@ -38,19 +31,14 @@ Completed Work:
   * Found the slowing down flux spectrum $\phi_0$ and weighting function $\phi_2$
   * Used those fine grid fluxes to calculate flux weighted xs's and diffusion coefficients
   * Data saved to .h5 files for superior compression
+  * Loaded data from previous runs
+  * N material compatibility
 
 Current work: 
-  * Iteratively sove the Sp3 transport problem with updated xs's
-  * Compress the matrix operators to TT format OR CSR sparse matrix conversion
-  * Use flux spectrum to find resonant parameters $\lambda$
-
-Future Work:
+  * Flux weighted cross-sections and diffusion coefficients
   * Continuous Energy Monte-Carlo to find buckling parameter $B^2$
-  * Expansion of 2 material to N-region
 
 Assumptions:
   * Constant gridspacing in lethargy
   * Group constants are constant within the energy group
   * Homogenous media weighted by number densities
-  
-HW2: Slowing down calculation for fine grid with discritization over energy then angle. This works. 
