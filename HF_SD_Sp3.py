@@ -8,7 +8,7 @@ import os
 import h5py
 
 class Sp3:
-    def __init__(self,data_dir, nbins, B2, NH):
+    def __init__(self,data_dir, nbins, B2, NH, fromH5):
         self.data_dir = data_dir
         self.save_dir = "results/data/"
         self.B2 = B2
@@ -21,6 +21,7 @@ class Sp3:
         self.NH = NH
         self.AU = 238
         self.NU = 1
+        self.fromH5 = fromH5
 
         chi35 = pd.read_csv(f'{data_dir}chi_u235.txt', sep = '\t',header = 0)
         H1 = pd.read_csv(f'{data_dir}xs_h1_T293k.txt', sep  = '\t', header = 0)
@@ -51,7 +52,7 @@ class Sp3:
         self.L2 = np.zeros_like(self.L0)
         self.L3 = np.zeros_like(self.L0)
         self.chart_dir = "results/charts/"
-        self.save_data = False
+        self.save_data = True
 
     def get_data(self,data, gridpoints, N):
         data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
@@ -240,9 +241,10 @@ class Sp3:
 
     def calc_Ln(self,A,sigma_t, sigma_s):
         # l x g-1 x g-1 matrix
+        phi = np.ones(self.boundaries.size)
         sigma_gtg = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
                                         self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
-                                        self.alpha_fn(A), self.E0, self.tol)
+                                        self.alpha_fn(A), self.E0, self.tol,phi)
         self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
         self.plot_each_l(A,sigma_s,sigma_gtg)
 
@@ -289,17 +291,50 @@ class Sp3:
 
     def run(self):
         self.initial_flux()
-        print('Build Sigma_gtg and Ln for Uranium')
-        self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U)
-        print(f'Build Sigma_gtg and Ln for Hydrogen, NH = {self.NH}')
-        self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H)
-        self.transpose_and_save_Ln()
-        self.calc_phi()
-        self.plot_fluxes()
-        self.plot_flux_diff()
-        self.calc_Phi()
-        if self.save_data == True: self.save_fluxes()
+        if self.fromH5 == True: self.read_data()
+        else:
+            print(f"Starting calculation. Saving Data = {self.save_data}")
+            print('Build Sigma_gtg and Ln for Uranium')
+            self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U)
+            print(f'Build Sigma_gtg and Ln for Hydrogen, NH = {self.NH}')
+            self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H)
+            self.transpose_and_save_Ln()
+            self.calc_phi()
+            self.plot_fluxes()
+            self.plot_flux_diff()
+            self.calc_Phi()
+            if self.save_data == True: self.save_fluxes()
 
+        # Uranium flux weighted xs's
+        sigma_sl_0_U, sigma_sl_2_U = self.flux_weighted_sigma_sl(self.AU,self.sig_s0_U)
+        
+        # Hydrogen flux weighted xs's
+        sigma_sl_0_H, sigma_sl_2_H = self.flux_weighted_sigma_sl(self.AU,self.sig_s0_U)
+
+    def flux_weighted_sigma_sl(self,A,sigma_s):
+        sigma_sl_0 = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
+                                        self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
+                                        self.alpha_fn(A), self.E0, self.tol,self.Phi0)
+
+        sigma_sl_2 = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
+                                        self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
+                                        self.alpha_fn(A), self.E0, self.tol,self.Phi2)
+
+    def read_data(self):
+        print("Reading Data From File...")
+        with h5py.File(f"{self.save_dir}Ln_{self.NH}.h5", "r") as f:
+            self.L0 = f["L0"][:]
+            self.L1 = f["L1"][:]
+            self.L2 = f["L2"][:]
+            self.L3 = f["L3"][:]
+        print("Ln Read!")
+
+        df = pd.read_hdf(f"{self.save_dir}fluxes_{self.NH}.h5", key="df")
+        self.phi0 = df['phi0'].to_numpy()
+        self.phi2 = df['phi2'].to_numpy()
+        self.Phi0 = df['Phi0'].to_numpy()
+        self.Phi2 = df['Phi2'].to_numpy()
+        print("Phi Read!")
 
     @staticmethod
     def alpha_fn(A): return ((A - 1.0)/(A + 1.0)) ** 2
@@ -312,12 +347,12 @@ class Sp3:
 
     @staticmethod
     @njit(parallel=True, fastmath=True)
-    def gen_sig_sn_gtg(A, sig_s0, order, boundaries, gmax_vec, alpha, E0, tol, n_sub = 8):
+    def gen_sig_sn_gtg(A, sig_s0, order, boundaries, gmax_vec, alpha, E0, tol, phi, n_sub = 8):
         """Parallel midpoint integration (no SciPy quad).
         Integrates over x in [c, x2] using n_sub midpoints per base-bin."""
         G = boundaries.size
         du = boundaries[1] - boundaries[0]
-        den = (1.0 - alpha) * du
+        den = (1 - alpha) * du
         lga = -np.log(alpha) if A != 1 else np.inf
         sigma_gtg = np.zeros((order, G - 1, G - 1))
         Am1 = A-1
@@ -342,6 +377,7 @@ class Sp3:
                     n_steps = n_steps_base * n_sub
                     dx = length / n_steps
 
+                    # integrate
                     acc = 0
                     for s in range(n_steps):
                         xm = c + (s + .5) * dx
@@ -382,21 +418,105 @@ class Sp3:
 
                         acc += val
 
-                    sigma_gtg[l, gp, g] = (sig_s0[gp] * (acc * dx) )/ den
+                    sigma_gtg[l, gp, g] = (sig_s0[gp] * phi[gp] * acc * dx ) / (den * phi[gp])
+
                     if np.abs(sigma_gtg[l,gp,g]) < tol: break
 
         return sigma_gtg
 
-#######################RUN########################
+    @staticmethod
+    def print_mat_properties(LHS):
+        """prints important matrix properties"""
+        def is_diagonally_dominant(A):
+            """checks if a matrix is diagonally dominant"""
+            # loop over rows
+            for i in range(A.shape[0]):
+                row_sum = np.sum(np.abs(A[i])) - np.abs(A[i, i])
+                if np.abs(A[i, i]) < row_sum: return False
+
+            return True
+
+        print("Rank of LHS:", np.linalg.matrix_rank(LHS))
+        print("Determinant of LHS:", np.linalg.det(LHS))
+        print("Log-Condition Number:", np.linalg.cond(LHS))
+        print("Any NaNs or Infs in LHS?", np.any(np.isnan(LHS)) or np.any(np.isinf(LHS)))
+        print("Diagonally dominant: ", is_diagonally_dominant(LHS))
+
+
+    @staticmethod
+    def read_sigma_s(l, A, NH):
+        """Read only the S{l} dataset from the HDF5 file."""
+        my_str = "H" if A == 1 else "U"
+        with h5py.File(f"{scratch_dir}/sigma_s_{my_str}_{NH}.h5", "r") as f:
+            return np.array(f[f"sigma_s{l}"])
+
+    @staticmethod
+    def read_d_mat(NH,prefix,l):
+        """Read .h5 diffusion matrix for an isotope."""
+        with h5py.File(f"{scratch_dir}/diffusion_coefficients_{NH}.h5", "r") as f:
+            return np.array(f[f"D{prefix}_{l}"])
+
+    @staticmethod
+    def deallocate(my_list):
+        """Free up memory because large matrices"""
+        for obj in my_list: del obj
+        my_list.clear()
+    @staticmethod
+    def normalize(vec):
+        if vec.ndim != 1: raise ValueError("Vector isn't 1D")
+        return vec / np.sum(vec)    
+
+    @staticmethod
+    def L2_norm(A,B): return np.linalg.norm(A-B, ord=2) if A.shape == B.shape else np.inf
+
+    @staticmethod
+    def diff_matrix(sigma_t,sigma_s1,B2): # sigma_s1 is a matrix
+        """Traditional diffusion matrix calculation"""
+        # gamma buckling correction factor
+        def gamma_fn(B2,sigma_t):
+            # takes in the individual xs!
+            if B2 == 0: return 1
+
+            b = np.sqrt(np.abs(B2)) / sigma_t
+
+            if B2 > 0: return b*np.arctan(b)/(3*(1-b**(-1)*np.arctan(b)))
+
+            else:
+                gamma = b*np.log((1+b)/(1-b))
+                gamma /= 3*(-2+b**(-1)*np.log((1+b)/(1-b)))
+                return gamma
+
+        gamma_mat = np.zeros_like(sigma_t)
+        for i in range(sigma_t.size): gamma_mat[i] = gamma_fn(B2,sigma_t[i])
+
+        @njit(parallel=True)
+        def parallel_sigma_tr(sigma_t,sigma_s1,B2,gamma_mat):
+            # transport cross-section
+            sigma_tr = np.zeros_like(sigma_s1)
+            for i in prange(sigma_s1.shape[0]): # rows p0
+                for j in range(sigma_s1.shape[1]):
+                    if i == j: sigma_tr[i,j] = gamma_mat[i] * sigma_t[i] - sigma_s1[i,j]
+                    else: sigma_tr[i,j] = - sigma_s1[i,j]
+
+            return sigma_tr
+
+        # diffusion coef calculation
+        sigma_tr = parallel_sigma_tr(sigma_t,sigma_s1,B2,gamma_mat)
+
+        return np.linalg.inv(3*sigma_tr)
+
+
+####################### RUN ########################
 stt = time.time()
 NH = 5
 data_dir = 'data/'
-B2 = .01
-nbins = 20000
+B2 = 0.0
+nbins = 5000
+fromH5 = False
 
 # init class
 print(f"Initializing, {nbins} Groups")
-sp3 = Sp3(data_dir,nbins,B2,NH)
+sp3 = Sp3(data_dir,nbins,B2,NH,fromH5)
 sp3.run()
 
 stp = time.time()
