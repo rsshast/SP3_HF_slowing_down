@@ -8,6 +8,9 @@ Then, calculate the fission source, create new flux weighted cross-sections (xs'
 
 Usage:
 
+The user must create a *results* directory with subdirectories *charts* and *data*
+The user may change file paths within **Sp3.__init__** to match their desired directory structure. 
+
 Data contains:
   * Cross section data for
     * Hydrogen
