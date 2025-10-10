@@ -8,8 +8,8 @@ import os
 import h5py
 
 class Sp3:
-    def __init__(self,data_dir, nbins, B2, NH, fromH5):
-        self.data_dir = data_dir
+    def __init__(self, nbins, B2, NH, few_groups, fromH5):
+        self.data_dir = 'data/'
         self.save_dir = "results/data/"
         self.B2 = B2
         self.tol = 1e-8 # loop break condition
@@ -23,10 +23,10 @@ class Sp3:
         self.NU = 1
         self.fromH5 = fromH5
 
-        chi35 = pd.read_csv(f'{data_dir}chi_u235.txt', sep = '\t',header = 0)
-        H1 = pd.read_csv(f'{data_dir}xs_h1_T293k.txt', sep  = '\t', header = 0)
-        U238 = pd.read_csv(f'{data_dir}xs_u238_T293k.txt',sep  = '\t', header = 0)
-        sigma_f = pd.read_csv(f'{data_dir}xs_u238_fission.csv', sep = ',', dtype=float).to_numpy()
+        chi35 = pd.read_csv(f'{self.data_dir}chi_u235.txt', sep = '\t',header = 0)
+        H1 = pd.read_csv(f'{self.data_dir}xs_h1_T293k.txt', sep  = '\t', header = 0)
+        U238 = pd.read_csv(f'{self.data_dir}xs_u238_T293k.txt',sep  = '\t', header = 0)
+        sigma_f = pd.read_csv(f'{self.data_dir}xs_u238_fission.csv', sep = ',', dtype=float).to_numpy()
 
         chi = np.array([chi35['E'],chi35['chi']]).T
         H = np.array([H1['E'],H1['sigma_t'],H1['sigma_s']]).T
@@ -55,8 +55,8 @@ class Sp3:
         self.L2 = np.zeros_like(self.L0)
         self.L3 = np.zeros_like(self.L0)
         self.chart_dir = "results/charts/"
-        self.save_data = False
-        self.few_groups = 8
+        self.save_data = True
+        self.few_groups = few_groups
 
     def get_data(self,data, gridpoints):
         data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
@@ -253,8 +253,8 @@ class Sp3:
         sigma_gtg = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
                                         self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
                                         self.alpha_fn(A), self.E0, self.tol,phi)
-#        self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
-#        self.plot_each_l(A,sigma_s,sigma_gtg)
+        self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
+        self.plot_each_l(A,sigma_s,sigma_gtg)
 
         self.L0 += self._Ln(0, sigma_t, sigma_gtg[0,:,:])
         self.L1 += self._Ln(1, sigma_t, sigma_gtg[1,:,:])
@@ -410,7 +410,7 @@ class Sp3:
             print(f'Build Sigma_gtg and Ln for Hydrogen, NH = {self.NH}')
             self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H)
             self.transpose_and_save_Ln()
-            if self.B2.size == 1: self.calc_phi()
+            if isinstance(self.B2, float): self.calc_phi()
             else: self.calc_phi_B2()
             self.calc_Phi()
             self.plot_fluxes()
@@ -422,6 +422,7 @@ class Sp3:
         self.phi_weighted_sigma(self.sig_t_H,self.AH, "total")
         self.phi_weighted_sigma(self.sigma_f,self.AU, "fission")
 
+        sig_s1_diffusion = np.zeros_like(self.L1)
         # Uranium
         print("Uranium Group->Group Few Group Cross-Sections")
         sigma_sl = self.gen_sig_sn_gtg(self.AU,self.sig_s0_U,self.leg_order, self.boundaries,
@@ -431,8 +432,9 @@ class Sp3:
         self.sigma_s1, self.sigma_s1_0, self.sigma_s1_2 = self.phi_weighted_sigma_sl(sigma_sl[1,:,:], self.AU, 1)
         self.sigma_s2, self.sigma_s2_0, self.sigma_s2_2 = self.phi_weighted_sigma_sl(sigma_sl[2,:,:], self.AU, 2)
         self.sigma_s3, self.sigma_s3_0, self.sigma_s3_2 = self.phi_weighted_sigma_sl(sigma_sl[3,:,:], self.AU, 3)
-        self.save_sigma_sl(self.AU)
+        if self.save_data == True: self.save_sigma_sl(self.AU)
 
+        sig_s1_diffusion += sigma_sl[1,:,:]
 
         # Hydrogen
         print("Hydrogen Group->Group Few Group Cross-Sections")
@@ -443,9 +445,14 @@ class Sp3:
         self.sigma_s1, self.sigma_s1_0, self.sigma_s1_2 = self.phi_weighted_sigma_sl(sigma_sl[1,:,:], self.AH, 1)
         self.sigma_s2, self.sigma_s2_0, self.sigma_s2_2 = self.phi_weighted_sigma_sl(sigma_sl[2,:,:], self.AH, 2)
         self.sigma_s3, self.sigma_s3_0, self.sigma_s3_2 = self.phi_weighted_sigma_sl(sigma_sl[3,:,:], self.AH, 3)
-        self.save_sigma_sl(self.AH)
+        if self.save_data == True: self.save_sigma_sl(self.AH)
 
-        print("Calculation Complete")
+        sig_s1_diffusion += sigma_sl[1,:,:]
+
+        # calulate diffusion coefs
+        self.Dn_coef(sig_s1_diffusion)
+        
+        # End
 
     def phi_weighted_sigma(self, sigma, A,key):
         # start generating few group xs's
@@ -465,85 +472,93 @@ class Sp3:
         u_ave = np.zeros_like(E_ave)
         sigma_fg = np.zeros_like(E_ave)
         for i in range(self.few_groups): 
-            idx_ave = int(.5 * (fg_idx[i] + fg_idx[i+1]))
-            E_ave[i] = self.Evec[idx_ave]
-            u_ave[i] = self.boundaries[idx_ave]
+            E_ave[i] = self.Evec[fg_idx[i]]
+            u_ave[i] = self.boundaries[fg_idx[i]]
 
         # Uranium flux weighted xs's
-        sigma_fg = sigma_vec_few_grp(sigma[:-1], self.phi0, fg_idx, self.Evec[:-1])
+        phi = np.ones_like(self.phi0)
+        sigma_fg = sigma_vec_few_grp(sigma[:-1], phi, fg_idx, self.Evec[:-1])
+        #sigma_fg = sigma_vec_few_grp(sigma[:-1], self.phi0, fg_idx, self.Evec[:-1])
         sigma_fg_0 = sigma_vec_few_grp(sigma[:-1], self.Phi0, fg_idx, self.Evec[:-1])
         sigma_fg_2 = sigma_vec_few_grp(sigma[:-1], self.Phi2, fg_idx, self.Evec[:-1])
         print(f"L2 norm on phi0 and Phi0 weighted xs's for A={A}, {key}: {self.L2_norm(sigma_fg,sigma_fg_0)}")
 
         # save data to .h5
-        df = pd.DataFrame({
-            "Energy": E_ave,
-            "Lethargy": u_ave,
-            "Sigma Average": sigma_fg,
-            "Sigma Phi0": sigma_fg_0,
-            "Sigma Phi2": sigma_fg_2,
-        })
+        if self.save_data == True:
+            df = pd.DataFrame({
+                "Energy": E_ave,
+                "Lethargy": u_ave,
+                "Sigma Average": sigma_fg,
+                "Sigma Phi0": sigma_fg_0,
+                "Sigma Phi2": sigma_fg_2,
+            })
 
-        df.to_csv(f"{self.save_dir}fg_xs_{key}_A{A}_NH{self.NH}.csv")
+            df.to_csv(f"{self.save_dir}fg_xs_{key}_A{A}_NH{self.NH}.csv")
 
-    def phi_weighted_sigma_sl(self, sigma, A, l):
-        def block_flux_weighted(sigma_mat, phi, group_idx, E):
-            """Double integral helper function"""
-            m = group_idx.size - 1
-            out = np.zeros((m, m), dtype=float)
-    
-            denom_phi = np.zeros(m, dtype=float)
-            area_I = np.zeros(m, dtype=float)
-            for I in range(m):
-                # integral of 1 dE over [E_sI, E_tI]
-                sI, tI = group_idx[I], group_idx[I + 1]
-                area_I[I] = np.trapz(np.ones(tI - sI, dtype=float), E[sI:tI])
-                # denominator
-                sJ, tJ = group_idx[I], group_idx[I + 1]
-                denom_phi[I] = np.trapz(phi[sJ:tJ], E[sJ:tJ])
-    
-            # Double integral via nested trapezoids
-            for I in range(m):
-                sI, tI = group_idx[I], group_idx[I + 1]
-                for J in range(m):
-                    sJ, tJ = group_idx[J], group_idx[J + 1]
-                    blk = sigma_mat[sI:tI, sJ:tJ]                           
-                    tmp = blk * phi[sJ:tJ][None, :]                         
-                    col_int = np.trapz(tmp, E[sJ:tJ], axis=1)       
-                    num = np.trapz(col_int, E[sI:tI])       
-                    out[I, J] = num / (denom_phi[J] * area_I[I])
-    
-            return out
-    
+    def phi_weighted_sigma_sl(self, M, A, l):
+        """Get gtg flux weighte xs's"""
         N = self.phi0.size
         E = self.Evec[:-1]
         u = self.boundaries
         fg_idx = np.linspace(0, N, self.few_groups + 1, dtype=int)
+        M_fg = np.zeros((self.few_groups,self.few_groups),dtype=float)
+        M_fg_0 = np.zeros_like(M_fg)
+        M_fg_2 = np.zeros_like(M_fg)
+        phi = np.ones_like(self.phi0)
 
-        E_ave = np.zeros(self.few_groups, dtype=float)
-        u_ave = np.zeros_like(E_ave)
         for i in range(self.few_groups):
-            idx_ave = (fg_idx[i] + fg_idx[i + 1]) // 2
-            E_ave[i] = E[idx_ave]
-            u_ave[i] = u[idx_ave]
+            r0, r1 = fg_idx[i], fg_idx[i+1]
+            for j in range(self.few_groups):
+                c0, c1 = fg_idx[j], fg_idx[j + 1]
+                # Integrate across incident-energy slice for every row, then average over the row block
+                M_fg[i, j]   = np.mean(np.trapz(M[r0:r1, c0:c1] * phi[c0:c1], E[c0:c1], axis=1)) / np.trapz(phi[c0:c1], E[c0:c1])
+                M_fg_0[i, j] = np.mean(np.trapz(M[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi0[c0:c1], E[c0:c1])
+                M_fg_2[i, j] = np.mean(np.trapz(M[r0:r1, c0:c1] * self.Phi2[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi2[c0:c1], E[c0:c1])
+                
     
-        sigma_fg   = block_flux_weighted(sigma, self.phi0, fg_idx, E)
-        sigma_fg_0 = block_flux_weighted(sigma, self.Phi0, fg_idx, E)
-        sigma_fg_2 = block_flux_weighted(sigma, self.Phi2, fg_idx, E)
-        print(f"L2 norm on phi0 vs Phi0 weighted Sigma_s{l} gtg for A={A}: {self.L2_norm(sigma_fg, sigma_fg_0)}")
-    
-        """
-        # ----- save -----
-        # Save matrices as CSV (row/col = coarse group indices)
-        pd.DataFrame(sigma_fg).to_csv(f"{self.save_dir}fg_xs_{key}_A{A}_NH{self.NH}_phi0.csv", index=False)
-        pd.DataFrame(sigma_fg_0).to_csv(f"{self.save_dir}fg_xs_{key}_A{A}_NH{self.NH}_Phi0.csv", index=False)
-        pd.DataFrame(sigma_fg_2).to_csv(f"{self.save_dir}fg_xs_{key}_A{A}_NH{self.NH}_Phi2.csv", index=False)
-    
-        # Also save coarse-grid metadata
-        meta_df = pd.DataFrame({"Energy_center": E_ave, "Lethargy_center": u_ave})
-        meta_df.to_csv(f"{self.save_dir}fg_meta_{key}_A{A}_NH{self.NH}.csv", index=False)
-        """
-        return sigma_fg, sigma_fg_0, sigma_fg_2
+        print(f"L2 norm on phi0 vs Phi0 weighted gtg for A={A} and l={l}: {self.L2_norm(M_fg, M_fg_0)}")
+
+        return M_fg, M_fg_0, M_fg_2
+
+    def Dn_coef(self, sig_s1):
+        print("Calculating Phi0/Phi2 weighted Diffusion Coefficients")
+        L1_inv = np.linalg.inv(self.L1)
+        L3_inv = np.linalg.inv(self.L1)
+        N = self.phi0.size
+        E = self.Evec[:-1]
+        u = self.boundaries
+        fg_idx = np.linspace(0, N, self.few_groups + 1, dtype=int)
+        D00 = np.zeros((self.few_groups,self.few_groups))
+        D02 = np.zeros_like(D00)
+        D20 = np.zeros_like(D00)
+        D22 = np.zeros_like(D00)
+        D = np.zeros_like(D00)
+
+        sigma_t = self.sig_t_U + self.sig_t_H
+        B2 = self.B2 if isinstance(self.B2, float) else 0.0
+        D_tr = self.diff_matrix(sigma_t,sig_s1,B2)
+        phi_tr = np.ones_like(self.Phi0)
+
+        for i in range(self.few_groups):
+            r0, r1 = fg_idx[i], fg_idx[i+1]
+            for j in range(self.few_groups):
+                c0, c1 = fg_idx[j], fg_idx[j + 1]
+                # Integrate across incident-energy slice for every row, then average over the row block
+                D[i, j] = np.mean(np.trapz(D_tr[r0:r1, c0:c1] * phi_tr[c0:c1], E[c0:c1], axis=1)) / np.trapz(phi_tr[c0:c1], E[c0:c1])
+                D00[i, j] = np.mean(np.trapz(L1_inv[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi0[c0:c1], E[c0:c1])
+                D02[i, j] = np.mean(np.trapz(L1_inv[r0:r1, c0:c1] * self.Phi2[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi2[c0:c1], E[c0:c1])
+                D20[i, j] = np.mean(np.trapz(L3_inv[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi0[c0:c1], E[c0:c1])
+                D22[i, j] = np.mean(np.trapz(L3_inv[r0:r1, c0:c1] * self.Phi2[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi2[c0:c1], E[c0:c1])
+                
+        if self.save_data == True:
+            with h5py.File(f"{self.save_dir}D_coef_{self.NH}.h5", "w") as f:
+                f.create_dataset("D", data=D)
+                f.create_dataset("D00", data=D00)
+                f.create_dataset("D02", data=D02)
+                f.create_dataset("D20", data=D20)
+                f.create_dataset("D22", data=D22)
+
+        print(f"L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: {self.L2_norm(D, D00)}")
 
     def read_data(self):
         print("Reading Data From File...")
@@ -565,18 +580,18 @@ class Sp3:
     def save_sigma_sl(self,A):
         # save
         with h5py.File(f"{self.save_dir}Sigma_sl_A{A}_{self.NH}.h5", "w") as f:
-                f.create_dataset("Sigma S0", data=self.sigma_s0)
-                f.create_dataset("Sigma S0 phi0", data=self.sigma_s0_0)
-                f.create_dataset("Sigma S0 phi2", data=self.sigma_s0_2)
-                f.create_dataset("Sigma S1", data=self.sigma_s1)
-                f.create_dataset("Sigma S1 phi0", data=self.sigma_s1_0)
-                f.create_dataset("Sigma S1 phi2", data=self.sigma_s1_2)
-                f.create_dataset("Sigma S2", data=self.sigma_s2)
-                f.create_dataset("Sigma S2 phi0", data=self.sigma_s2_0)
-                f.create_dataset("Sigma S2 phi2", data=self.sigma_s2_2)
-                f.create_dataset("Sigma S3", data=self.sigma_s3)
-                f.create_dataset("Sigma S3 phi0", data=self.sigma_s3_0)
-                f.create_dataset("Sigma S3 phi2", data=self.sigma_s3_2)
+            f.create_dataset("Sigma S0", data=self.sigma_s0)
+            f.create_dataset("Sigma S0 phi0", data=self.sigma_s0_0)
+            f.create_dataset("Sigma S0 phi2", data=self.sigma_s0_2)
+            f.create_dataset("Sigma S1", data=self.sigma_s1)
+            f.create_dataset("Sigma S1 phi0", data=self.sigma_s1_0)
+            f.create_dataset("Sigma S1 phi2", data=self.sigma_s1_2)
+            f.create_dataset("Sigma S2", data=self.sigma_s2)
+            f.create_dataset("Sigma S2 phi0", data=self.sigma_s2_0)
+            f.create_dataset("Sigma S2 phi2", data=self.sigma_s2_2)
+            f.create_dataset("Sigma S3", data=self.sigma_s3)
+            f.create_dataset("Sigma S3 phi0", data=self.sigma_s3_0)
+            f.create_dataset("Sigma S3 phi2", data=self.sigma_s3_2)
 
     @staticmethod
     def alpha_fn(A): return ((A - 1.0)/(A + 1.0)) ** 2
@@ -751,15 +766,15 @@ class Sp3:
 ####################### RUN ########################
 stt = time.time()
 NH = 5
-data_dir = 'data/'
 B2 = .01
 #B2 = np.linspace(-1,1,10)
 nbins = 5000
-fromH5 = True
+few_groups = 8
+fromH5 = False
 
 # init class
 print(f"Initializing, {nbins} Groups")
-sp3 = Sp3(data_dir,nbins,B2,NH,fromH5)
+sp3 = Sp3(nbins, B2, NH, few_groups, fromH5)
 sp3.run()
 
 stp = time.time()

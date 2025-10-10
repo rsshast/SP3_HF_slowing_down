@@ -1,0 +1,28 @@
+Initializing, 5000 Groups
+Starting calculation. Saving Data = True
+Build Sigma_gtg and Ln for Uranium
+Plot Sigma_sl
+Build Sigma_gtg and Ln for Hydrogen, NH = 5
+Plot Sigma_sl
+Calc phi
+Plotting phi0, phi2
+L2 norm on phi0 and reference, = 1.568326242004282e-08
+L2 norm on Phi0 and reference, = 1.5685117010098494e-08
+Saving Data...
+Few Group Cross-Sections
+L2 norm on phi0 and Phi0 weighted xs's for A=238, total: 130.39899026514473
+L2 norm on phi0 and Phi0 weighted xs's for A=1, total: 5.968654273183661
+L2 norm on phi0 and Phi0 weighted xs's for A=238, fission: 0.26914626780893347
+Uranium Group->Group Few Group Cross-Sections
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=0: 0.03425214806815563
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=1: 0.01213155317573563
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=2: 0.00309065268431601
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=3: 0.0009274097646424179
+Hydrogen Group->Group Few Group Cross-Sections
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=0: 0.00973663356318098
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=1: 0.0070118123965891305
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=2: 0.0030021728894409107
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=3: 0.0007684210701800931
+Calculating Phi0/Phi2 weighted Diffusion Coefficients
+L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: 1.1698047074095004e-05
+Calculation Time = 77.654334
