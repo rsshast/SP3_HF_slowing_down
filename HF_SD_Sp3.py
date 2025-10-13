@@ -253,6 +253,9 @@ class Sp3:
         sigma_gtg = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
                                         self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
                                         self.alpha_fn(A), self.E0, self.tol,phi)
+        sigma_gtg[0,:,:] += self.upscatter_l0(A,sigma_s,self.Evec[:-1],self.kT)
+        print(sigma_gtg[0,:,:])
+        assert 0 == 1
         self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
         self.plot_each_l(A,sigma_s,sigma_gtg)
 
@@ -496,7 +499,7 @@ class Sp3:
             df.to_csv(f"{self.save_dir}fg_xs_{key}_A{A}_NH{self.NH}.csv")
 
     def phi_weighted_sigma_sl(self, M, A, l):
-        """Get gtg flux weighte xs's"""
+        # Get gtg flux weighte xs's
         N = self.phi0.size
         E = self.Evec[:-1]
         u = self.boundaries
@@ -505,17 +508,19 @@ class Sp3:
         M_fg_0 = np.zeros_like(M_fg)
         M_fg_2 = np.zeros_like(M_fg)
         phi = np.ones_like(self.phi0)
+        gmax_vec = self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A)))
 
         for i in range(self.few_groups):
-            r0, r1 = fg_idx[i], fg_idx[i+1]
+            stt_i, stp_i = fg_idx[i], fg_idx[i+1]
             for j in range(self.few_groups):
-                c0, c1 = fg_idx[j], fg_idx[j + 1]
-                # Integrate across incident-energy slice for every row, then average over the row block
-                M_fg[i, j]   = np.mean(np.trapz(M[r0:r1, c0:c1] * phi[c0:c1], E[c0:c1], axis=1)) / np.trapz(phi[c0:c1], E[c0:c1])
-                M_fg_0[i, j] = np.mean(np.trapz(M[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi0[c0:c1], E[c0:c1])
-                M_fg_2[i, j] = np.mean(np.trapz(M[r0:r1, c0:c1] * self.Phi2[c0:c1], E[c0:c1], axis=1)) / np.trapz(self.Phi2[c0:c1], E[c0:c1])
-                
-    
+                stt_j, stp_j = fg_idx[j], fg_idx[j+1]
+                M_fg[i,j] = np.sum(np.trapz(M[stt_i:stp_i,stt_j:stp_j] * phi[stt_i:stp_i], E[stt_i:stp_i]) 
+                        / np.trapz(phi[stt_i:stp_i],E[stt_i:stp_i]))
+                M_fg_0[i,j] = np.sum(np.trapz(M[stt_i:stp_i,stt_j:stp_j] * self.Phi0[stt_i:stp_i], E[stt_i:stp_i]) 
+                        / np.trapz(self.Phi0[stt_i:stp_i],E[stt_i:stp_i]))
+                M_fg_2[i,j] = np.sum(np.trapz(M[stt_i:stp_i,stt_j:stp_j] * self.Phi2[stt_i:stp_i], E[stt_i:stp_i]) 
+                        / np.trapz(self.Phi2[stt_i:stp_i],E[stt_i:stp_i]))
+
         print(f"L2 norm on phi0 vs Phi0 weighted gtg for A={A} and l={l}: {self.L2_norm(M_fg, M_fg_0)}")
 
         return M_fg, M_fg_0, M_fg_2
@@ -682,6 +687,26 @@ class Sp3:
         return sigma_gtg
 
     @staticmethod
+    @njit(parallel=True,fastmath=True)
+    def upscatter_l0(A,sig_s,Evec,kT):
+        G = Evec.size
+        sigma_gtg = np.zeros(G,G)
+        sqrtA = np.sqrt(A)
+        theta = .5 * (sqrtA + 1 / sqrtA)
+        rho = .5 * (sqrtA - 1 / sqrtA)
+        for g in prange(G):
+            x = np.sqrt(Evec[g] / kT)
+            sigma_fr = sig_s[g]
+            for gp in range(g):
+                xp = np.sqrt(Evec[gp] / kT)
+                coef = sigma_fr / (2 * kT) * (theta * theta) / (xp * xp)
+                t1 = np.exp(xp*xp - x*x) * (math.erf(theta * xp - rho * x) + math.erf(theta * xp + rho * x))
+                t2 = math.erf(theta * x -rho * xp) - math.erf(theta * x + rho * xp)
+                sigma_gtg[gp,g] = coef * (t1 + t2)
+
+        return sigma_gtg        
+
+    @staticmethod
     def print_mat_properties(LHS):
         """prints important matrix properties"""
         def is_diagonally_dominant(A):
@@ -770,7 +795,7 @@ B2 = .01
 #B2 = np.linspace(-1,1,10)
 nbins = 5000
 few_groups = 8
-fromH5 = False
+fromH5 = True
 
 # init class
 print(f"Initializing, {nbins} Groups")
