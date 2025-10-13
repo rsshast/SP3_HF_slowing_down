@@ -1,11 +1,12 @@
 import numpy as np
 import pandas as pd
-import time
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-from numba import njit, prange
+import time
+import math
 import os
 import h5py
+from numba import njit, prange
 
 class Sp3:
     def __init__(self, nbins, B2, NH, few_groups, fromH5):
@@ -43,6 +44,9 @@ class Sp3:
         self.sig_t_H = H[:,1]
         self.sig_s0_H = H[:,2]
         self.sigma_f = self.get_data(sigma_f,self.nbins)[:,1]
+        self.T         = 293 # degrees Kelvin
+        self.k         = 8.617e-5  # eV/K (Boltzmann constant)
+        self.kT        = self.k * self.T
 
         G = self.boundaries.size
         self.phi0 = np.zeros((G-1))
@@ -57,6 +61,7 @@ class Sp3:
         self.chart_dir = "results/charts/"
         self.save_data = True
         self.few_groups = few_groups
+
 
     def get_data(self,data, gridpoints):
         data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
@@ -253,9 +258,7 @@ class Sp3:
         sigma_gtg = self.gen_sig_sn_gtg(A,sigma_s,self.leg_order, self.boundaries,
                                         self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
                                         self.alpha_fn(A), self.E0, self.tol,phi)
-        sigma_gtg[0,:,:] += self.upscatter_l0(A,sigma_s,self.Evec[:-1],self.kT)
-        print(sigma_gtg[0,:,:])
-        assert 0 == 1
+        sigma_gtg[0,:,:] += self.upscatter_l0(A,sigma_s,self.Evec[:-1],self.kT,self.tol)
         self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
         self.plot_each_l(A,sigma_s,sigma_gtg)
 
@@ -266,7 +269,6 @@ class Sp3:
 
     def calc_phi_B2(self):
         print('Calc phi B2')
-
         p0 = []
         p2 = []
         # phi0
@@ -480,8 +482,8 @@ class Sp3:
 
         # Uranium flux weighted xs's
         phi = np.ones_like(self.phi0)
-        sigma_fg = sigma_vec_few_grp(sigma[:-1], phi, fg_idx, self.Evec[:-1])
-        #sigma_fg = sigma_vec_few_grp(sigma[:-1], self.phi0, fg_idx, self.Evec[:-1])
+        #sigma_fg = sigma_vec_few_grp(sigma[:-1], phi, fg_idx, self.Evec[:-1])
+        sigma_fg = sigma_vec_few_grp(sigma[:-1], self.phi0, fg_idx, self.Evec[:-1])
         sigma_fg_0 = sigma_vec_few_grp(sigma[:-1], self.Phi0, fg_idx, self.Evec[:-1])
         sigma_fg_2 = sigma_vec_few_grp(sigma[:-1], self.Phi2, fg_idx, self.Evec[:-1])
         print(f"L2 norm on phi0 and Phi0 weighted xs's for A={A}, {key}: {self.L2_norm(sigma_fg,sigma_fg_0)}")
@@ -507,7 +509,8 @@ class Sp3:
         M_fg = np.zeros((self.few_groups,self.few_groups),dtype=float)
         M_fg_0 = np.zeros_like(M_fg)
         M_fg_2 = np.zeros_like(M_fg)
-        phi = np.ones_like(self.phi0)
+        phi = self.phi0
+        #phi = np.ones_like(self.phi0)
         gmax_vec = self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A)))
 
         for i in range(self.few_groups):
@@ -688,22 +691,24 @@ class Sp3:
 
     @staticmethod
     @njit(parallel=True,fastmath=True)
-    def upscatter_l0(A,sig_s,Evec,kT):
+    def upscatter_l0(A,sig_s,Evec,kT, tol):
+        print("Upscatter")
         G = Evec.size
-        sigma_gtg = np.zeros(G,G)
+        sigma_gtg = np.zeros((G,G))
         sqrtA = np.sqrt(A)
         theta = .5 * (sqrtA + 1 / sqrtA)
         rho = .5 * (sqrtA - 1 / sqrtA)
-        for g in prange(G):
-            x = np.sqrt(Evec[g] / kT)
-            sigma_fr = sig_s[g]
-            for gp in range(g):
-                xp = np.sqrt(Evec[gp] / kT)
+        for gp in prange(G):
+            xp = np.sqrt(Evec[gp] / kT)
+            sigma_fr = sig_s[gp]
+            for g in range(gp):
+                x = np.sqrt(Evec[g] / kT)
                 coef = sigma_fr / (2 * kT) * (theta * theta) / (xp * xp)
                 t1 = np.exp(xp*xp - x*x) * (math.erf(theta * xp - rho * x) + math.erf(theta * xp + rho * x))
-                t2 = math.erf(theta * x -rho * xp) - math.erf(theta * x + rho * xp)
-                sigma_gtg[gp,g] = coef * (t1 + t2)
-
+                t2 = math.erf(theta * x - rho * xp) - math.erf(theta * x + rho * xp)
+                sig_check = coef * (t1 + t2)
+                if sig_check > tol: sigma_gtg[gp,g] = sig_check
+        
         return sigma_gtg        
 
     @staticmethod
@@ -795,7 +800,7 @@ B2 = .01
 #B2 = np.linspace(-1,1,10)
 nbins = 5000
 few_groups = 8
-fromH5 = True
+fromH5 = False
 
 # init class
 print(f"Initializing, {nbins} Groups")
