@@ -1,35 +1,34 @@
-# Continuous Multigroup SpN Calculation in Slowing Down Region
-Paper available upon request, 
-
-rsshast@umich.edu
+# Hyperfine $SP_3$ Calculation in Slowing Down Region with Imposed Leakage $B^2$
+Paper available upon request, please email rsshast@umich.edu
 
 Ravi Shastri, Brian Kiedrowski
 
 Discritization over angle and then energy to find the slowing down flux spectrum. 
 Then, calculate the fission source, create new flux weighted cross-sections (xs's) and diffusion coefficients. 
 
+# Requirements:
+  * numpy=1.26.2
+  * pandas=2.1.4
+  * matplotlib
+  * h5py=3.12.1
+  * numba=0.59.0
+
 Usage:
+## batch_sp3.sh contains:
+  * Slurm cluster submission script
+  * Edit with your cluster information
 
-__init__.py contains:
-  * Modules required to run the code
-
-setup.py contains:
-  * energy group discritization and corresponding interpolated cross sections
-  * Number Densities
-  * Option to generate fresh data or load from .h5 files. 
-  
-Sp3.py Method contains:
-  * methods for calculating scattering and loss operators
-  * methods for calculating flux moments
-  * methods for calculating new group cross sections and diffusion coefficients
-  
-run_sp3.py contains:
-  * gets the data
-  * plots the cross-sections
-  * sp3.run()
-
-plot_scat_ranges.py contains: 
-  * function to visualize the group bound for the scattering integral
+## HF_SD_Sp3.py contains:
+  * $SP_3$ solver class
+  * Initial Conditions
+    * Energy ranges
+    * Materials and number densities
+    * Cross-section data processing and generation to order L=3
+  * Reference solution from Scattering Source Solution, self.p0
+  * Parametric Leakage Calculation
+  * $\phi_0, \phi_2, \Phi_0, \Phi_2$ Calculations using the Loss Operator Driven Method
+  * Result Analysis
+  * Flux Weighted Cross-Section and Diffusion Coefficient Generation
 
 Completed Work:
   * Transformed from Energy to Lethargy Discretization in Energy
@@ -37,20 +36,16 @@ Completed Work:
   * Integrated those cross sections to find the Loss Operator on the same range
   * Found the slowing down flux spectrum $\phi_0$ and weighting function $\phi_2$
   * Used those fine grid fluxes to calculate flux weighted xs's and diffusion coefficients
-  * Data saved to .h5 files for superior compression
 
 Current work: 
-  * Iteratively sove the Sp3 transport problem with updated xs's
-  * Compress the matrix operators to TT format OR CSR sparse matrix conversion
-  * Use flux spectrum to find resonant parameters $\lambda$
+  * Incorporate Upscatter to reference and $SP_3$ solutions
+  * Finalize Physor Conference Submission
 
 Future Work:
   * Continuous Energy Monte-Carlo to find buckling parameter $B^2$
-  * Expansion of 2 material to N-region
+  * Submit research as a journal publication
 
 Assumptions:
   * Constant gridspacing in lethargy
   * Group constants are constant within the energy group
   * Homogenous media weighted by number densities
-  
-HW2: Slowing down calculation for fine grid with discritization over energy then angle. This works. 
