@@ -13,7 +13,7 @@ Then, calculate the fission source, create new flux weighted cross-sections (xs'
   * h5py=3.12.1
   * numba=0.59.0
 
-Usage:
+# Usage:
 ## batch_sp3.sh contains:
   * Slurm cluster submission script
   * Edit with your cluster information
