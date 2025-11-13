@@ -10,14 +10,15 @@ from numba import njit, prange
 import psutil
 
 class Sp3:
-    def __init__(self, nbins, B2, NH, few_groups, fromH5):
+    def __init__(self, nbins, B2, NH, few_groups, fromH5, dx):
         self.data_dir = 'data/'
         self.save_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/"
         self.chart_dir = "results/charts/"
-        self.save_data = False
+        self.save_data = True
         self.B2 = B2
         self.E0 = 1e7
-        self.Emin = 1e-2
+        self.Emin = 1
+        #self.Emin = 1e-2
         self.nbins = nbins + 1
         self.leg_order = 4
         self.AH = 1
@@ -70,9 +71,14 @@ class Sp3:
         self.L2 = np.zeros_like(self.L0)
         self.L3 = np.zeros_like(self.L0)
 
-        
-        self.sigma_s_gtg_U = np.zeros_like(self.L0)
-        self.sigma_s_gtg_H = np.zeros_like(self.L0)
+        self.sigma_s_gtg_U = np.zeros((self.leg_order,G-1,G-1))
+        self.sigma_s_gtg_H = np.zeros_like(self.sigma_s_gtg_U)
+
+        # Sp3 Transport Solve Parameters
+        self.L = 10
+        self.dx = dx
+        self.num_cells = int(self.L / self.dx)
+        self.max_iters = 1000000
 
     def get_data(self,data, gridpoints):
         data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
@@ -88,96 +94,6 @@ class Sp3:
         xp = data[:, 0]
         for i in range(1, data.shape[1]): out[:, i] = np.interp(new_grid, xp, data[:, i])
         return out
-
-    """
-    def initial_flux_mat(self):
-        G = self.p0.size
-        u = 0.5 * (self.boundaries[1:G+1] + self.boundaries[0:G])
-        du_i = self.boundaries[1:G+1] - self.boundaries[0:G]
-    
-        chi = (
-            np.trapz(
-                np.stack([self.chi[0:G], self.chi[1:G+1]], axis=1),
-                np.stack([self.boundaries[0:G], self.boundaries[1:G+1]], axis=1),
-                axis=1
-            ) / du_i
-        )
-        StH = (
-            np.trapz(
-                np.stack([self.sig_t_H[0:G], self.sig_t_H[1:G+1]], axis=1),
-                np.stack([self.boundaries[0:G], self.boundaries[1:G+1]], axis=1),
-                axis=1
-            ) / du_i
-        )
-        SsH = (
-            np.trapz(
-                np.stack([self.sig_s0_H[0:G], self.sig_s0_H[1:G+1]], axis=1),
-                np.stack([self.boundaries[0:G], self.boundaries[1:G+1]], axis=1),
-                axis=1
-            ) / du_i
-        )
-    
-        StU = (
-            np.trapz(
-                np.stack([self.sig_t_U[0:G], self.sig_t_U[1:G+1]], axis=1),
-                np.stack([self.boundaries[0:G], self.boundaries[1:G+1]], axis=1),
-                axis=1
-            ) / du_i
-        )
-        SsU = (
-            np.trapz(
-                np.stack([self.sig_s0_U[0:G], self.sig_s0_U[1:G+1]], axis=1),
-                np.stack([self.boundaries[0:G], self.boundaries[1:G+1]], axis=1),
-                axis=1
-         ) / du_i
-        )
-    
-        du = u[1] - u[0]
-        alphaU = self.alpha_fn(self.AU)
-        inv1ma = 1.0 / (1.0 - alphaU)
-        lga = -np.log(alphaU)
-        gmax = int(np.floor(lga / du))
-        f = (lga / du) - gmax
-    
-        expu = np.exp(u)   # e^{u[j]}
-        expm = np.exp(-u)  # e^{-u[i]}
-        Sigma_R = (StH + StU) - du * (SsH + SsU * inv1ma)
-        A = np.zeros((G, G), dtype=float)
-        b = chi.copy()
-    
-        cH = np.zeros(G, dtype=float)
-        cU = np.zeros(G, dtype=float)
-        A[0,0] = Sigma_R[0]
-    
-        for i in range(1, G):
-    
-            # update scat coeffs based on step from i-1 -> i
-            # hydrogen add from (i-1)
-            cH[i-1] += SsH[i-1] * expu[i-1] * du
-    
-            # uranium add from (i-1)
-            cU[i-1] += SsU[i-1] * inv1ma * expu[i-1] * du
-    
-            # uranium subtract if we're past window
-            if i > gmax:
-                h = i - gmax
-                cU[h]   -= SsU[h]   * inv1ma * (1.0 - f) * expu[h]   * du
-                cU[h-1] -= SsU[h-1] * inv1ma * f         * expu[h-1] * du
-    
-            # build row i:
-            A[i,i] = Sigma_R[i]
-    
-            # off-diagonals j < i
-            coeff_row = expm[i] * (cH[:i] + cU[:i])  # this multiplies phi[j]
-            A[i, :i] -= coeff_row  # minus sign from bringing to LHS
-    
-        phi = np.zeros(G, dtype=float)
-        for i in range(G):
-            rhs = b[i] - np.dot(A[i,:i], phi[:i])
-            phi[i] = rhs / A[i,i]
-
-        return phi
-    """
 
     def initial_flux(self):
         """Compute the initial scalar flux using scattering source method nuclear engineering handbook method"""
@@ -265,12 +181,14 @@ class Sp3:
                                         self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
                                         self.alpha_fn(A), self.E0, phi)
 
+        print(f"Sigma_gtg A={A} Time: {np.round(time.time()-stt,5)} s")
         # transpose with gp on x axis and g on y axis
         S = np.transpose(sigma_gtg, (0, 2, 1))          
 
+        if self.save_data: self.save_sig_s_gtg(S,A,self.save_dir,self.NH)
+
         if A == 1: self.sigma_s_gtg_H = S
         else: self.sigma_s_gtg_U = S
-        print(f"Sigma_gtg A={A} Time: {np.round(time.time()-stt,5)} s")
 
 #        self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
 #        self.plot_each_l(A,sigma_s,sigma_gtg)
@@ -416,10 +334,22 @@ class Sp3:
     def save_Ln(self):
         if self.save_data == True:
             with h5py.File(f"{self.save_dir}Ln_{self.NH}.h5", "w") as f:
-                f.create_dataset("L0", data=self.L0)
-                f.create_dataset("L1", data=self.L1)
-                f.create_dataset("L2", data=self.L2)
-                f.create_dataset("L3", data=self.L3)
+                f.create_dataset("L0", data=self.L0,compression="gzip", compression_opts=4)
+                f.create_dataset("L1", data=self.L1,compression="gzip", compression_opts=4)
+                f.create_dataset("L2", data=self.L2,compression="gzip", compression_opts=4)
+                f.create_dataset("L3", data=self.L3,compression="gzip", compression_opts=4)
+
+    @staticmethod
+    def save_grp_vectors(sig_t,sig_t_0,sig_t_2,sig_f, sig_f_0, sig_f_2, chi,save_dir):
+        print("Saving Group Vectors")
+        df = pd.DataFrame({'sig_t': sig_t,
+                            'sig_t_0': sig_t_0,
+                            'sig_t_2': sig_t_2,
+                            'sig_f': sig_f,
+                            'sig_f_0': sig_f_0,
+                            'sig_f_2': sig_f_2,
+                            })
+        df.to_csv(f"{save_dir}grp_vectors.csv")
 
     def save_fluxes(self):
         print("Saving Data...")
@@ -579,8 +509,41 @@ class Sp3:
             plt.savefig(f'{self.chart_dir}sigma_s{l}_A{A}.png')
             plt.clf()
 
+    def few_group_fluxes(self):
+        # collapse the fine group down to few group fluxes
+        few_grp_Phi0 = np.zeros((self.few_groups))
+        few_grp_Phi2 = np.zeros((self.few_groups))
+        fg_idx = np.linspace(0,self.phi0.size,self.few_groups+1, dtype=int)
+
+        for i in range(few_grp_Phi0.size):
+            stt, stp = fg_idx[i], fg_idx[i+1]
+            few_grp_Phi0[i] = np.trapz(self.Phi0[stt:stp], self.boundaries[stt:stp])
+            few_grp_Phi2[i] = np.trapz(self.Phi2[stt:stp], self.boundaries[stt:stp]) 
+
+        # plotting
+        index = 1
+        Phi_plot = np.zeros_like(self.phi0)
+        for i in range(self.phi0.size):
+            if i < fg_idx[index]: Phi_plot[i] = few_grp_Phi0[index-1]
+            else:
+                index += 1
+                Phi_plot[i] = few_grp_Phi0[index-1]
+
+        plt.figure()
+        plt.plot(self.Eplot,self.normalize(Phi_plot),label=r"Few Group $\Phi_0 (E)$")
+        plt.title("Few Group Scalar Flux")
+        plt.ylabel(r"$\Phi_0$")
+        plt.xlabel("Energy (ev)")
+        plt.xscale("log")
+        plt.legend()
+        plt.grid(which='Both')
+        plt.savefig(f"{self.chart_dir}fg_Phi0.png")
+
+        return few_grp_Phi0, few_grp_Phi2
+
     def phi_weighted_sigma(self, sigma, A, key):
         # start generating few group xs's
+
         def sigma_vec_few_grp(sigma, phi, group_idx, E):
             few_grp_xs = np.zeros((group_idx.size - 1))
             # ensure sigma and phi are the same size
@@ -648,8 +611,8 @@ class Sp3:
 
         M_fg_norm = M_fg / np.linalg.norm(M_fg)
         M_fg_0_norm = M_fg_0 / np.linalg.norm(M_fg_0)
-#        print(f"Update A={A} sigma_s{l} xs: {np.round(time.time()-stt,5)} s")
-#        print(f"L2 norm on phi0 vs Phi0 weighted gtg for A={A} and l={l}: {self.L2_norm((M_fg_norm), (M_fg_0_norm))}")
+        print(f"Update A={A} sigma_s{l} xs: {np.round(time.time()-stt,5)} s")
+        print(f"L2 norm on phi0 vs Phi0 weighted gtg for A={A} and l={l}: {self.L2_norm((M_fg_norm), (M_fg_0_norm))}")
 
         return M_fg, M_fg_0, M_fg_2
 
@@ -670,7 +633,6 @@ class Sp3:
         if isinstance(self.B2, float) or ifinstance(self.B2,int): B2 = self.B2
         else: B2 = 0
         D_tr = self.diff_matrix(sigma_t,sig_s1,B2)
-        print(D_tr.shape)
         phi_tr = self.phi0
 
         for i in range(self.few_groups):
@@ -680,28 +642,22 @@ class Sp3:
                 # Integrate across incident-energy slice for every row, then average over the row block
                 D[i, j] = (np.sum(np.trapz(D_tr[r0:r1, c0:c1] * phi_tr[c0:c1], E[c0:c1], axis=1)) 
                             / np.trapz(phi_tr[c0:c1], E[c0:c1]))
-                #D[i, j] = (np.mean(np.trapz(D_tr[r0:r1, c0:c1] * phi_tr[c0:c1], E[c0:c1], axis=1)) 
-                #            / np.trapz(phi_tr[c0:c1], E[c0:c1]))
                 D0[i, j] = (np.sum(np.trapz(L1_inv[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1)) 
                             / np.trapz(self.Phi0[c0:c1], E[c0:c1])).T
                 D2[i, j] = (np.sum(np.trapz(L3_inv[r0:r1, c0:c1] * self.Phi2[c0:c1], E[c0:c1], axis=1)) 
                             / np.trapz(self.Phi2[c0:c1], E[c0:c1])).T
                 
-        print(D)
         print(f"D_coef Time: {np.round(time.time()-stt,5)} s")
         if self.save_data == True:
             with h5py.File(f"{self.save_dir}D_coef_{self.NH}.h5", "w") as f:
-                f.create_dataset("D", data=D)
-                f.create_dataset("D0", data=D0)
-                f.create_dataset("D2", data=D2)
+                f.create_dataset("D", data=D,compression="gzip", compression_opts=4)
+                f.create_dataset("D0", data=D0,compression="gzip", compression_opts=4)
+                f.create_dataset("D2", data=D2,compression="gzip", compression_opts=4)
 
-#        D_norm = D / np.linalg.norm(D)
-#        D0_norm = D0 / np.linalg.norm(D0)
-#        print(f"L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: {self.L2_norm((D_norm), (D0_norm))}")
+        D_norm = D / np.linalg.norm(D)
+        D0_norm = D0 / np.linalg.norm(D0)
+        print(f"L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: {self.L2_norm((D_norm), (D0_norm))}")
 
-#        print(D)
-#        print(D0)
-#        print(D2)
         return D, D0, D2
 
     def read_data(self):
@@ -714,30 +670,422 @@ class Sp3:
         self.p0   = df['phi_ref'].to_numpy()
         print("Phi Read!")
 
-        with h5py.File(f"{self.save_dir}Ln_{self.NH}.h5", "r") as f:
-            self.L0 = f["L0"][:]
-            self.L1 = f["L1"][:]
-            self.L2 = f["L2"][:]
-            self.L3 = f["L3"][:]
-        print("Ln Read!")
+        #with h5py.File(f"{self.save_dir}Ln_{self.NH}.h5", "r") as f:
+        #    self.L0 = f["L0"][:]
+        #    self.L1 = f["L1"][:]
+        #    self.L2 = f["L2"][:]
+        #    self.L3 = f["L3"][:]
+        #print("Ln Read!")
 
-    def save_sigma_sl(self,A):
-        # save
-        with h5py.File(f"{self.save_dir}Sigma_sl_A{A}_{self.NH}.h5", "w") as f:
-            f.create_dataset("Sigma S0", data=self.sigma_s0.T)
-            f.create_dataset("Sigma S0 phi0", data=self.sigma_s0_0.T)
-            f.create_dataset("Sigma S0 phi2", data=self.sigma_s0_2.T)
-            f.create_dataset("Sigma S1", data=self.sigma_s1.T)
-            f.create_dataset("Sigma S1 phi0", data=self.sigma_s1_0.T)
-            f.create_dataset("Sigma S1 phi2", data=self.sigma_s1_2.T)
-            f.create_dataset("Sigma S2", data=self.sigma_s2.T)
-            f.create_dataset("Sigma S2 phi0", data=self.sigma_s2_0.T)
-            f.create_dataset("Sigma S2 phi2", data=self.sigma_s2_2.T)
-            f.create_dataset("Sigma S3", data=self.sigma_s3.T)
-            f.create_dataset("Sigma S3 phi0", data=self.sigma_s3_0.T)
-            f.create_dataset("Sigma S3 phi2", data=self.sigma_s3_2.T)
+        with h5py.File(f"{self.save_dir}Sigma_sl_gtg_A238_{self.NH}.h5", "r") as f:
+            self.sigma_s_gtg_U[0,:,:] = f["Sigma S0"][:]
+            self.sigma_s_gtg_U[1,:,:] = f["Sigma S1"][:]
+            self.sigma_s_gtg_U[2,:,:] = f["Sigma S2"][:]
+            self.sigma_s_gtg_U[3,:,:] = f["Sigma S3"][:]
 
-    def run(self):
+        with h5py.File(f"{self.save_dir}Sigma_sl_gtg_A1_{self.NH}.h5", "r") as f:
+            self.sigma_s_gtg_H[0,:,:] = f["Sigma S0"][:]
+            self.sigma_s_gtg_H[1,:,:] = f["Sigma S1"][:]
+            self.sigma_s_gtg_H[2,:,:] = f["Sigma S2"][:]
+            self.sigma_s_gtg_H[3,:,:] = f["Sigma S3"][:]
+        print("Sigma_gtg Read")
+
+        df = pd.read_csv(f"{self.save_dir}grp_vectors.csv").to_numpy()
+        self.Sig_t = df[:,0]
+        self.Sig_t_0 = df[:,1]
+        self.Sig_t_2 = df[:,2]
+        self.Sig_f = df[:,3]
+        self.Sig_f_0 = df[:,4]
+        self.Sig_f_2 = df[:,5]
+        self.Chi = df[:,6]
+        print("Group Vectors Read")
+
+        with h5py.File(f"{self.save_dir}Sigma_sl_A238_{self.NH}.h5", "r") as f:
+            self.Sig_s0 = f["Sigma S0"][:]
+            self.Sig_s0_0 = f["Sigma S0 phi0"][:]
+            self.Sig_s0_2 = f["Sigma S0 phi2"][:]
+            self.Sig_s1 = f["Sigma S1"][:]
+            self.Sig_s1_0 = f["Sigma S1 phi0"][:]
+            self.Sig_s1_2 = f["Sigma S1 phi2"][:]
+            self.Sig_s2 = f["Sigma S2"][:]
+            self.Sig_s2_0 = f["Sigma S2 phi0"][:]
+            self.Sig_s2_2 = f["Sigma S2 phi2"][:]
+            self.Sig_s3 = f["Sigma S3"][:]
+            self.Sig_s3_0 = f["Sigma S3 phi0"][:]
+            self.Sig_s3_2 = f["Sigma S3 phi2"][:]
+
+        with h5py.File(f"{self.save_dir}Sigma_sl_A1_{self.NH}.h5", "r") as f:
+            self.Sig_s0 += f["Sigma S0"][:]
+            self.Sig_s0_0 += f["Sigma S0 phi0"][:]
+            self.Sig_s0_2 += f["Sigma S0 phi2"][:]
+            self.Sig_s1 += f["Sigma S1"][:]
+            self.Sig_s1_0 += f["Sigma S1 phi0"][:]
+            self.Sig_s1_2 += f["Sigma S1 phi2"][:]
+            self.Sig_s2 += f["Sigma S2"][:]
+            self.Sig_s2_0 += f["Sigma S2 phi0"][:]
+            self.Sig_s2_2 += f["Sigma S2 phi2"][:]
+            self.Sig_s3 += f["Sigma S3"][:]
+            self.Sig_s3_0 += f["Sigma S3 phi0"][:]
+            self.Sig_s3_2 += f["Sigma S3 phi2"][:]
+        print("Phi weighted xs's Read")
+
+        with h5py.File(f"{self.save_dir}Dn_coefs.h5", "r") as f:
+            self.D = f["D"][:]
+            self.D0 = f["D0"][:]
+            self.D2 = f["D2"][:]
+        print("Diffusion Coefs Read")
+
+    def upd_grp_constants(self,verbose=False):
+        print("Few Group Cross-Sections")
+        sig_t_U, sig_t_U_0, sig_t_U_2 = self.phi_weighted_sigma(self.sig_t_U,self.AU, "total")
+        pdf = self.get_percent_diff(sig_t_U,sig_t_U_0,0)
+        if verbose: print(f"{pdf:5g}, sigma_t U")
+
+        sig_t_H, sig_t_H_0, sig_t_H_2 = self.phi_weighted_sigma(self.sig_t_H,self.AH, "total")
+        pdf = self.get_percent_diff(sig_t_H,sig_t_H_0,0)
+        if verbose: print(f"{pdf:5g}, sigma_t H")
+
+        self.Sig_f, self.Sig_f_0, self.Sig_f_2 = self.phi_weighted_sigma(self.sigma_f,self.AU, "nu * sigma_f")
+        pdf = self.get_percent_diff(self.Sig_f,self.Sig_f_0,0)
+        if verbose: print(f"{(pdf/self.nu):5g}, nu * sigma_f")
+
+        self.Chi, _, _ = self.phi_weighted_sigma(self.chi, self.AU, "chi")
+
+        self.Sig_t = sig_t_U + sig_t_H
+        self.Sig_t_0 = sig_t_U_0 + sig_t_H_0
+        self.Sig_t_2 = sig_t_U_2 + sig_t_H_2
+
+        if self.save_data == True: self.save_grp_vectors(self.Sig_t,self.Sig_t_0,self.Sig_t_2,
+                                                            self.Sig_f, self.Sig_f_0, self.Sig_f_2, 
+                                                            self.Chi, self.save_dir)
+
+        # Uranium
+        print("Uranium Group->Group Few Group Cross-Sections")
+        sigma_s0_U, sigma_s0_0_U,sigma_s0_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[0,:,:], self.AU,0)
+        pdf = self.get_percent_diff(sigma_s0_U,sigma_s0_0_U,0)
+        if verbose: print(f"{pdf:5g}, sigma_s0 U")
+
+        sigma_s1_U, sigma_s1_0_U,sigma_s1_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[1,:,:], self.AU,1)
+        pdf = self.get_percent_diff(sigma_s1_U,sigma_s1_0_U,0)
+        if verbose: print(f"{pdf:5g}, sigma_s1 U")
+
+        sigma_s2_U, sigma_s2_0_U,sigma_s2_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[2,:,:], self.AU,2)
+        pdf = self.get_percent_diff(sigma_s2_U,sigma_s2_0_U,0)
+        if verbose: print(f"{pdf:5g}, sigma_s2 U")
+
+        sigma_s3_U, sigma_s3_0_U,sigma_s3_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[3,:,:], self.AU,3)
+        pdf = self.get_percent_diff(sigma_s3_U,sigma_s3_0_U,0)
+        if verbose: print(f"{pdf:5g}, sigma_s3 U")
+
+        if self.save_data == True: self.save_sigma_sl(sigma_s0_U, sigma_s0_0_U, sigma_s0_2_U,
+                                                        sigma_s1_U, sigma_s1_0_U, sigma_s1_2_U,
+                                                        sigma_s2_U, sigma_s2_0_U, sigma_s2_2_U,
+                                                        sigma_s3_U, sigma_s3_0_U, sigma_s3_2_U,
+                                                        self.AU,self.save_dir,self.NH)
+
+        # Hydrogen
+        print("Hydrogen Group->Group Few Group Cross-Sections")
+        sigma_s0_H, sigma_s0_0_H, sigma_s0_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[0,:,:], self.AH,0)
+        pdf = self.get_percent_diff(sigma_s0_H,sigma_s0_0_H,0)
+        if verbose: print(f"{pdf:5g}, sigma_s0 H")
+
+        sigma_s1_H, sigma_s1_0_H, sigma_s1_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[1,:,:], self.AH,1)
+        pdf = self.get_percent_diff(sigma_s1_H,sigma_s1_0_H,0)
+        if verbose: print(f"{pdf:5g}, sigma_s1 H")
+
+        sigma_s2_H, sigma_s2_0_H, sigma_s2_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[2,:,:], self.AH,2)
+        pdf = self.get_percent_diff(sigma_s2_H,sigma_s2_0_H,0)
+        if verbose: print(f"{pdf:5g}, sigma_s2 H")
+
+        sigma_s3_H, sigma_s3_0_H, sigma_s3_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[3,:,:], self.AH,3)
+        pdf = self.get_percent_diff(sigma_s3_H,sigma_s3_0_H,0)
+        if verbose: print(f"{pdf:5g}, sigma_s3 H")
+
+        if self.save_data == True: self.save_sigma_sl(sigma_s0_H, sigma_s0_0_H, sigma_s0_2_H,
+                                                        sigma_s1_H, sigma_s1_0_H, sigma_s1_2_H,
+                                                        sigma_s2_H, sigma_s2_0_H, sigma_s2_2_H,
+                                                        sigma_s3_H, sigma_s3_0_H, sigma_s3_2_H,
+                                                        self.AH,self.save_dir,self.NH)
+
+        self.Sig_s0 = sigma_s0_U + sigma_s0_H
+        self.Sig_s0_0 = sigma_s0_0_U + sigma_s0_0_H
+        self.Sig_s0_2 = sigma_s0_2_U + sigma_s0_2_H
+        self.Sig_s2_0 = sigma_s2_0_U + sigma_s2_0_H
+        self.Sig_s2_2 = sigma_s2_2_U + sigma_s2_2_H
+
+        # calulate diffusion coefs
+        self.D, self.D0, self.D2 = self.Dn_coef(self.sigma_s_gtg_U[1,:,:] + self.sigma_s_gtg_H[1,:,:])
+        pdf = self.get_percent_diff(self.D,self.D0,0)
+        if verbose: print(f"{pdf:5g}, Diffusion Coef 0")
+
+        if self.save_data == True: self.save_Dn(self.D,self.D0,self.D2,self.save_dir)
+
+    def finite_difference(self,tol=1e-5,omega=0.25):
+        print("Begin Finite Difference Sweep")
+        def sp3_block_thomas(
+            D0, D2, A00, A02, A20, A22, dx,
+            N,              # num cells
+            shift=0.0,      # tiny τ to add to all diagonal blocks (handles nullspace)
+            pin=None, pin_value=1.0  # optionally pin (i_pin, comp) to value
+        ):
+            """
+            Solve the 1D homogenized SP3 block-tridiagonal system in one pass.
+            Unknown at each cell i is X_i = [Phi0_i (G), Phi2_i (G)] with size 2G.
+        
+            Discretization (central diff) gives:
+              -D/dx^2*(X_{i+1} - 2 X_i + X_{i-1}) + A X_i = 0
+            where A = [[A00, A02],[A20, A22]], D = diag(D0, D2).
+        
+            Reflecting BC (Neumann): X_{-1} = X_{1}, X_{N} = X_{N-2}
+              => add + (D/dx^2) to the first and last diagonal blocks.
+            """
+            G = D0.shape[0]
+            m = 2*G
+            dx2 = dx*dx
+        
+            # Blocks
+            D0_off = (1.0/dx2)*D0
+            D2_off = (1.0/dx2)*D2
+            B = -np.block([[D0_off, np.zeros((G,G))],
+                           [np.zeros((G,G)), D2_off]])  # lower
+            C = B.copy()                                 # upper (same for 1D Laplacian)
+            D0_diag = (2.0/dx2)*D0
+            D2_diag = (2.0/dx2)*D2
+            A_center = np.block([[A00, A02],
+                                 [A20, A22]])
+            A_diag = np.block([[D0_diag, np.zeros((G,G))],
+                               [np.zeros((G,G)), D2_diag]]) + A_center
+        
+            # Allocate arrays for Thomas sweeps
+            # Diagonal blocks (modified), upper blocks (constant), and RHS (zero unless pin)
+            Atil = np.empty((N, m, m))
+            rhs  = np.zeros((N, m))
+        
+            # Fill all diagonals with center block + optional shift
+            for i in range(N):
+                Atil[i,:,:] = A_diag
+                if shift > 0.0:
+                    Atil[i, np.arange(m), np.arange(m)] += shift
+        
+            # Neumann: fold ghosts into edges (adds +D_off to diagonal at edges)
+            A_edge_add = np.block([[D0_off, np.zeros((G,G))],
+                                   [np.zeros((G,G)), D2_off]])
+            Atil[0,:,:]     += A_edge_add
+            Atil[N-1,:,:]   += A_edge_add
+        
+            # Optional pin: fix one DOF (cell, component) to value
+            if pin is not None:
+                i_pin, comp = pin
+                Atil[i_pin,:,:] = 0.0
+                Atil[i_pin, comp, comp] = 1.0
+                rhs[i_pin, :] = 0.0
+                rhs[i_pin, comp] = pin_value
+        
+            # Forward elimination
+            U = C  # constant upper block
+            for i in range(1, N):
+                # Solve Atil[i-1] * T = B  => T = Atil[i-1]^{-1} B
+                T = np.linalg.solve(Atil[i-1], B)
+                # Schur compliment for current diagonal
+                Atil[i] = Atil[i] - U @ T
+                # Update rhs
+                rhs[i]  = rhs[i] - U @ np.linalg.solve(Atil[i-1], rhs[i-1])
+        
+            # Back substitution
+            X = np.zeros((N, m))
+            X[N-1] = np.linalg.solve(Atil[N-1], rhs[N-1])
+            for i in range(N-2, -1, -1):
+                X[i] = np.linalg.solve(Atil[i], rhs[i] - U @ X[i+1])
+        
+            Phi0 = X[:, :G]
+            Phi2 = X[:, G:]
+            return Phi0, Phi2
+
+        
+        G, N = self.few_groups, self.num_cells
+        Phi0 = np.ones((N, G)); Phi2 = np.ones((N, G))
+        dx2 = self.dx * self.dx
+    
+        # Matrices (GxG), make sure Sig_f_* include ν; if not, multiply by nu
+        Sig_t_0 = np.diag(self.Sig_t_0)
+        Sig_t_2 = np.diag(self.Sig_t_2)
+        S00 = self.Sig_s0_0
+        S02 = self.Sig_s0_2
+        S22 = self.Sig_s2_2
+        chi = self.Chi
+        F0 = np.outer(chi, self.Sig_f_0)   # χ νΣf^0
+        F2 = np.outer(chi, self.Sig_f_2)   # χ νΣf^2
+        
+        # A-blocks from the equations above
+        A00 = (Sig_t_0 - S00) - F0
+        A02 = -2*(Sig_t_2 - S02) + 2*F2
+        A20 = -2*Sig_t_0 + 2*S00 + 2*F0
+        A22 = (Sig_t_2 - S22) + 4*Sig_t_2 - 4*S02 - 4*F2
+        stt_transport = time.time()
+        Phi0, Phi2 = sp3_block_thomas(self.D0, self.D2, A00, A02, A20, A22,
+                              self.dx, self.num_cells,
+                              pin=(self.num_cells//2, 0), pin_value=1.0, shift=0.0)
+        
+        # Diffusion blocks
+        #D0 = self.D0
+        #D2 = self.D2
+        #D0_diag = (2.0/dx2) * D0
+        #D2_diag = (2.0/dx2) * D2
+        #D0_off  = (1.0/dx2) * D0
+        #D2_off  = (1.0/dx2) * D2
+       # 
+       # # Per-cell center matrix (constant across i)
+       # M = np.block([[D0_diag + A00,  A02],
+       #               [A20,            D2_diag + A22]])
+       # 
+       # Minv = np.linalg.inv(M)      # outside Numba, once
+   # 
+   #     gs_sor_fd(Phi0, Phi2, D0_off, D2_off, Minv, self.max_iters, tol, omega)
+
+        """
+        # being finite difference for new method
+        Phi0 = np.ones((self.num_cells,self.few_groups)) 
+        Phi2 = np.ones((self.num_cells,self.few_groups))
+
+        # build data
+        sig_t_0 = np.diag(self.Sig_t_0)
+        sig_t_2 = np.diag(self.Sig_t_2)
+        sig_s0_0 = (self.Sig_s0_0)
+        sig_s0_2 = (self.Sig_s0_2)
+        sig_s2_0 = (self.Sig_s2_0)
+        sig_s2_2 = (self.Sig_s2_2)
+        chi = self.Chi
+        sig_f_0 = self.Sig_f_0
+        sig_f_2 = self.Sig_f_2
+
+        # NEGATIVE BUILT IN HERE
+        D0_inv = np.linalg.inv(self.D0)
+        D2_inv = np.linalg.inv(self.D2)
+        dx2 = self.dx * self.dx
+
+        it = 0
+        converged = False
+        print(f"Length: {self.L}cm, dx: {self.dx}, Num Nodes: {self.num_cells}")
+        stt_transport = time.time()
+        # begin Jacobi Solve
+        while not converged and it < self.max_iters:
+            # Reflecting BC
+            Phi0[0,:]  = Phi0[1,:]
+            Phi2[0,:]  = Phi2[1,:]
+            Phi0[-1,:] = Phi0[-2,:]
+            Phi2[-1,:] = Phi2[-2,:]
+            phi0_prev = Phi0.copy()
+            phi2_prev = Phi2.copy()
+            for i in range(1,self.num_cells-1):
+                # Phi0(position, Energy)
+                t1 = (sig_t_0 - sig_s0_0) @ phi0_prev[i,:]
+                t2 = np.outer(chi,sig_f_0) @ phi0_prev[i,:] - 2 * np.outer(chi,sig_f_2) @ phi2_prev[i,:]
+                t3 = 2 * (sig_t_2 - sig_s0_2) @ phi0_prev[i,:]
+                RHS = (dx2 * D0_inv) @ (-t1 + t2 + t3)
+                Phi0[i+1,:] = 2 * phi0_prev[i,:] - phi0_prev[i-1,:] + RHS 
+    
+                # Phi2(position, Energy)
+                t1 = (sig_t_2 - sig_s2_2) @ phi2_prev[i,:]
+                t2 = sig_t_0 @ phi0_prev[i,:] - 2 * (sig_t_2 @ phi2_prev[i,:])
+                t3 = sig_s0_0 @ phi0_prev[i,:] - 2 * (sig_s0_2 @ phi2_prev[i,:])
+                t4 = np.outer(chi, sig_f_0) @ phi0_prev[i,:] - 2 * np.outer(chi,sig_f_2) @ phi2_prev[i,:]
+                RHS = (2 * dx2 * D2_inv) @ (-t1 + t2 -t3 - t4)
+                Phi2[i+1,:] = 2 * phi2_prev[i,:] - phi2_prev[i-1,:] + RHS
+
+            # Reflecting BC
+            Phi0[0,:]  = Phi0[1,:]
+            Phi2[0,:]  = Phi2[1,:]
+            Phi0[-1,:] = Phi0[-2,:]
+            Phi2[-1,:] = Phi2[-2,:]
+
+            L2_0 = self.L2_norm(phi0_prev,Phi0)
+            L2_2 = self.L2_norm(phi2_prev,Phi2)
+            print(f"L2 Phi0={L2_0:.5e}, Phi2={L2_2:.5e}, it={it+1}")
+            converged = (max(L2_0, L2_2) < tol)
+
+            if max(L2_0, L2_2) > 1e3: raise ValueError("Sp3 Solve is Diverging")
+            it += 1
+        while not converged and it < self.max_iters:
+            # enforce reflecting BCs on the *previous* iterate
+            Phi0[0,:]  = Phi0[1,:]
+            Phi2[0,:]  = Phi2[1,:]
+            Phi0[-1,:] = Phi0[-2,:]
+            Phi2[-1,:] = Phi2[-2,:]
+    
+            phi0_prev = Phi0.copy()
+            phi2_prev = Phi2.copy()
+    
+            Phi0_new = phi0_prev.copy()
+            Phi2_new = phi2_prev.copy()
+    
+            # build once
+            F0 = np.outer(chi, sig_f_0)
+            F2 = np.outer(chi, sig_f_2)
+    
+            # update the *center* i using neighbors from prev (pure Jacobi)
+            for i in range(1, self.num_cells - 1):
+                t1_0 = (sig_t_0 - sig_s0_0) @ phi0_prev[i,:]
+                t2_0 = F0 @ phi0_prev[i,:] - 2.0 * (F2 @ phi2_prev[i,:])
+                t3_0 = 2.0 * (sig_t_2 - sig_s0_2) @ phi0_prev[i,:]
+    
+                # discrete Laplacian φ'' ≈ (φ_{i+1} - 2 φ_i + φ_{i-1}) / dx^2
+                # Solve D0 * φ'' = (-t1 + t2 + t3)  =>  φ'' = D0_inv @ (-t1 + t2 + t3)
+                rhs0 = dx2 * (D0_inv @ (-t1_0 + t2_0 + t3_0))
+                Phi0_cand = (phi0_prev[i+1,:] - 2.0*phi0_prev[i,:] + phi0_prev[i-1,:]) + rhs0
+                # Rearrange to update the center:
+                Phi0_new[i,:] = phi0_prev[i,:] + 0.5 * (Phi0_cand)  
+    
+                t1_2 = (sig_t_2 - sig_s2_2) @ phi2_prev[i,:]
+                t2_2 = (sig_t_0 @ phi0_prev[i,:]) - 2.0 * (sig_t_2 @ phi2_prev[i,:])
+                t3_2 = (sig_s0_0 @ phi0_prev[i,:]) - 2.0 * (sig_s0_2 @ phi2_prev[i,:])
+                t4_2 = F0 @ phi0_prev[i,:] - 2.0 * (F2 @ phi2_prev[i,:])
+    
+                rhs2 = 2.0 * dx2 * (D2_inv @ (-t1_2 + t2_2 - t3_2 - t4_2))
+                Phi2_cand = (phi2_prev[i+1,:] - 2.0*phi2_prev[i,:] + phi2_prev[i-1,:]) + rhs2
+                Phi2_new[i,:] = phi2_prev[i,:] + 0.5 * (Phi2_cand)
+    
+            # reflecting BCs on the *new* iterate
+            Phi0_new[0,:]  = Phi0_new[1,:]
+            Phi2_new[0,:]  = Phi2_new[1,:]
+            Phi0_new[-1,:] = Phi0_new[-2,:]
+            Phi2_new[-1,:] = Phi2_new[-2,:]
+    
+            # under-relax
+            Phi0 = (1 - omega) * phi0_prev + omega * Phi0_new
+            Phi2 = (1 - omega) * phi2_prev + omega * Phi2_new
+    
+            L2_0 = self.L2_norm(phi0_prev, Phi0)
+            L2_2 = self.L2_norm(phi2_prev, Phi2)
+            print(f"L2 Phi0={L2_0:.5e}, Phi2={L2_2:.5e}, it={it+1}")
+    
+            converged = (max(L2_0, L2_2) < tol)
+            if max(L2_0, L2_2) > 1e3:
+                raise ValueError("Sp3 Solve is Diverging")
+            it += 1
+        """
+        
+        print(f"Convergence Time: {np.round(time.time() - stt_transport, 5)} seconds")
+        nodes = np.linspace(0,self.L,self.num_cells)
+        phi0 = Phi0 - 2*Phi2
+        plt.figure()
+        for g in range(self.few_groups): plt.plot(nodes,phi0[:,g],label=fr"$\Phi_0$, g = {g+1}")
+        plt.xlabel("Position (cm)")
+        plt.ylabel(r"$\phi_0 (x,g)$")
+        plt.legend()
+        plt.grid(which="Both")
+        plt.savefig("New_SP3_solve_phi0.png")
+        plt.clf()
+
+        plt.figure()
+        for g in range(self.few_groups): plt.plot(nodes,Phi2[:,g],label=fr"$\phi_2$, g = {g+1}")
+        plt.xlabel("Position (cm)")
+        plt.ylabel(r"$\phi_2 (x,g)$")
+        plt.legend()
+        plt.grid(which="Both")
+        plt.savefig("New_SP3_solve_phi2.png")
+        plt.clf()
+
+    def run(self, transport = False):
         self.initial_flux()
         if self.fromH5 == True: self.read_data()
         else:
@@ -755,150 +1103,11 @@ class Sp3:
             #self.plot_flux_diff_single_axis()
             #self.plot_flux_diff()
             if self.save_data == True: self.save_fluxes()
+            self.upd_grp_constants()
 
-        def get_percent_diff(M1,M2,index):
-            """Get percent difference is index (i,i) in a matrix"""
-            assert M1.shape == M2.shape
-            if M1.ndim == 1:
-                return 100 * np.abs(M1[index] - M2[index]) / (np.abs(M1[index]))
-            else:
-                return 100 * np.abs(M1[index,index] - M2[index,index]) / (np.abs(M1[index,index]))
-
-        # normalize phi and Phi
-        #self.phi0 = self.normalize(self.phi0)
-        #self.phi2 = self.normalize(self.phi2)
-        #self.Phi0 = self.normalize(self.Phi0)
-        #self.Phi2 = self.normalize(self.Phi2)
-
-        print("Few Group Cross-Sections")
-        sig_t_U, sig_t_U_0, sig_t_U_2 = self.phi_weighted_sigma(self.sig_t_U,self.AU, "total")
-        pdf = get_percent_diff(sig_t_U,sig_t_U_0,0)
-        print(f"{pdf:5g}, sigma_t U")
-
-        sig_t_H, sig_t_H_0, sig_t_H_2 = self.phi_weighted_sigma(self.sig_t_H,self.AH, "total")
-        pdf = get_percent_diff(sig_t_H,sig_t_H_0,0)
-        print(f"{pdf:5g}, sigma_t H")
-
-        sig_f, sig_f_0, sig_f_2       = self.phi_weighted_sigma(self.sigma_f,self.AU, "nu * sigma_f")
-#        for i in range(sig_f.size): print(get_percent_diff(sig_f,sig_f_0,i))
-        pdf = get_percent_diff(sig_f,sig_f_0,0)
-        print(f"{(pdf/self.nu):5g}, nu * sigma_f")
-
-#        chi, _, _ = self.phi_weighted_sigma(self.chi, self.AU, "chi")
-
-        # Uranium
-        print("Uranium Group->Group Few Group Cross-Sections")
-        sigma_s0_U, sigma_s0_0_U,sigma_s0_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[0,:,:], self.AU,0)
-        pdf = get_percent_diff(sigma_s0_U,sigma_s0_0_U,0)
-        print(f"{pdf:5g}, sigma_s0 U")
-
-        sigma_s1_U, sigma_s1_0_U,sigma_s1_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[1,:,:], self.AU,1)
-        pdf = get_percent_diff(sigma_s1_U,sigma_s1_0_U,0)
-        print(f"{pdf:5g}, sigma_s1 U")
-
-        sigma_s2_U, sigma_s2_0_U,sigma_s2_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[2,:,:], self.AU,2)
-        pdf = get_percent_diff(sigma_s2_U,sigma_s2_0_U,0)
-        print(f"{pdf:5g}, sigma_s2 U")
-
-        sigma_s3_U, sigma_s3_0_U,sigma_s3_2_U = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[3,:,:], self.AU,3)
-        pdf = get_percent_diff(sigma_s3_U,sigma_s3_0_U,0)
-        print(f"{pdf:5g}, sigma_s3 U")
-
-#        if self.save_data == True: self.save_sigma_sl(self.AU)
-
-        # Hydrogen
-        print("Hydrogen Group->Group Few Group Cross-Sections")
-        sigma_s0_H, sigma_s0_0_H, sigma_s0_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[0,:,:], self.AH,0)
-        pdf = get_percent_diff(sigma_s0_H,sigma_s0_0_H,0)
-        print(f"{pdf:5g}, sigma_s0 H")
-
-        sigma_s1_H, sigma_s1_0_H, sigma_s1_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[1,:,:], self.AH,1)
-        pdf = get_percent_diff(sigma_s1_H,sigma_s1_0_H,0)
-        print(f"{pdf:5g}, sigma_s1 H")
-
-        sigma_s2_H, sigma_s2_0_H, sigma_s2_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[2,:,:], self.AH,2)
-        pdf = get_percent_diff(sigma_s2_H,sigma_s2_0_H,0)
-        print(f"{pdf:5g}, sigma_s2 H")
-
-        sigma_s3_H, sigma_s3_0_H, sigma_s3_2_H = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[3,:,:], self.AH,3)
-        pdf = get_percent_diff(sigma_s3_H,sigma_s3_0_H,0)
-        print(f"{pdf:5g}, sigma_s3 H")
-
-#        if self.save_data == True: self.save_sigma_sl(self.AH)
-
-        # calulate diffusion coefs
-        D, D0, D2 = self.Dn_coef(self.sigma_s_gtg_U[1,:,:] + self.sigma_s_gtg_H[1,:,:])
-        pdf = get_percent_diff(D,D0,0)
-        print(f"{pdf:5g}, Diffusion Coef 0")
-        #print(D)
-        #print(D0)
-        #print(D2)
-        """
-        D = D.T
-        D0 = D0.T
-        D2 = D2.T
-#        Dfoo = np.zeros_like(D)
-#        for i in range(D0.shape[0]):
-#            for j in range(D0.shape[1]):
-#                if D[i,j] != 0:
-#                    Dfoo[i,j] = 100 * np.abs(D[i,j] - D0[i,j]) / np.abs(D[i,j])
-#        print(Dfoo)
-
-        # being finite difference for new method
-        converged = False
-        it = 0
-        num_nodes = 100
-        dx = .1
-        dx2 = dx * dx
-        num_cells = int(num_nodes / dx)
-        Phi0 = np.ones((num_cells,few_groups))
-        Phi2 = np.ones((num_cells,few_groups))
-        sig_t_0 = np.diag(sig_t_U_0 + sig_t_H_0)
-        sig_t_2 = np.diag(sig_t_U_2 + sig_t_H_2)
-
-        # sigma_(legendre order)_(flux weight)
-        sig_s0_0 = (sigma_s0_0_H + sigma_s0_0_U).T
-        sig_s0_2 = (sigma_s0_2_H + sigma_s0_2_U).T
-        sig_s2_0 = (sigma_s2_0_H + sigma_s2_0_U).T 
-        sig_s2_2 = (sigma_s2_2_H + sigma_s2_2_U).T 
-
-        while not converged:
-            phi0_prev = Phi0.copy()
-            phi2_prev = Phi2.copy()
-
-            stt = time.time()
-            for i in range(1,num_cells - 1):
-                print(i)
-                #Phi0[i+1] for each group
-                t1 = (sig_t_0 - sig_s0_0) @ Phi0[i,:]
-                t2 = chi * (sig_f_0 @ Phi0[i,:] - 2 * sig_f_2 @ Phi2[i,:]) 
-                t3 = (sig_t_2 - sig_s2_2) @ Phi2[i,:]
-                RHS = -t1 + t2 + t3
-                RHS = np.linalg.solve(D0,dx2 * RHS)
-                Phi0[i+1,:] = 2 * Phi0[i,:] - Phi0[i-1,:] + RHS
- 
-                #Phi2[i+1] for each group
-                t1 = (sig_t_2 - sig_s2_2) @ Phi2[i,:]
-                t2 = (sig_t_0 @ Phi0[i,:] - 2 * sig_t_2 @ Phi2[i,:])
-                t3 = (sig_s0_0 @ Phi0[i,:] - 2 * sig_s0_2 @ Phi2[i,:])
-                t4 = - chi * (sig_f_0 @ Phi0[i,:] - 2 * sig_f_2 @ Phi2[i,:])
-                RHS = -t1 + t2 - t3 - t4
-                RHS = np.linalg.solve(D2,dx2 * RHS)
-                Phi2[i+1,:] = 2 * Phi2[i,:] - Phi2[i-1,:] + RHS
-
-            l2_norm_0 = self.L2_norm(Phi0,phi0_prev)
-            print(f"L2 norm: {l2_norm_0:.5g}, Iteration {it}")
-            l2_norm_2 = self.L2_norm(Phi2,phi2_prev)
-            print(f"L2 norm: {l2_norm_2:.5g}, Iteration {it}")
-
-            # break condition
-            if l2_norm_0 < 1e-6 and l2_norm_2 < 1e-6: 
-                print("Converged")
-                converged = True
-            else: it += 1
-
-        print(f"Convergence Time: {np.round(time.time() - stt, 5)} seconds")
-        """
+        # few group fluxes
+        Phi0_fg, Phi2_fg = self.few_group_fluxes()
+        if transport: self.finite_difference()
 
     @staticmethod
     def alpha_fn(A): return ((A - 1.0)/(A + 1.0)) ** 2
@@ -999,6 +1208,44 @@ class Sp3:
         print("Diagonally dominant: ", is_diagonally_dominant(LHS))
 
     @staticmethod
+    def save_sig_s_gtg(S,A,save_dir,NH):
+        print(f"Saving A={A} Data")
+        with h5py.File(f"{save_dir}Sigma_sl_gtg_A{A}_{NH}.h5", "w") as f:
+            f.create_dataset("Sigma S0", data=S[0,:,:],compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S1", data=S[1,:,:],compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S2", data=S[2,:,:],compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S3", data=S[3,:,:],compression="gzip", compression_opts=4)
+
+    @staticmethod
+    def save_sigma_sl(sigma_s0, sigma_s0_0, sigma_s0_2,
+                        sigma_s1, sigma_s1_0, sigma_s1_2,
+                        sigma_s2, sigma_s2_0, sigma_s2_2,
+                        sigma_s3, sigma_s3_0, sigma_s3_2,
+                        A,save_dir,NH):
+        # save
+        with h5py.File(f"{save_dir}Sigma_sl_A{A}_{NH}.h5", "w") as f:
+            f.create_dataset("Sigma S0", data=sigma_s0.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S0 phi0", data=sigma_s0_0.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S0 phi2", data=sigma_s0_2.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S1", data=sigma_s1.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S1 phi0", data=sigma_s1_0.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S1 phi2", data=sigma_s1_2.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S2", data=sigma_s2.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S2 phi0", data=sigma_s2_0.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S2 phi2", data=sigma_s2_2.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S3", data=sigma_s3.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S3 phi0", data=sigma_s3_0.T,compression="gzip", compression_opts=4)
+            f.create_dataset("Sigma S3 phi2", data=sigma_s3_2.T,compression="gzip", compression_opts=4)
+
+    @staticmethod
+    def save_Dn(D,D0,D2,save_dir):
+        # save
+        with h5py.File(f"{save_dir}Dn_coefs.h5", "w") as f:
+            f.create_dataset("D",  data=D,compression="gzip", compression_opts=4)
+            f.create_dataset("D0", data=D0,compression="gzip", compression_opts=4)
+            f.create_dataset("D2", data=D2,compression="gzip", compression_opts=4)
+
+    @staticmethod
     def normalize(vec):
         if vec.ndim != 1: raise ValueError("Vector isn't 1D")
         return vec / np.sum(vec)    
@@ -1041,19 +1288,29 @@ class Sp3:
 
         return np.linalg.inv(sigma_tr) / 3
 
+    @staticmethod
+    def get_percent_diff(M1,M2,index):
+        """Get percent difference is index (i,i) in a matrix"""
+        assert M1.shape == M2.shape
+        if M1.ndim == 1: return 100 * (np.abs(M1[index] - M2[index]) 
+                                        / (np.abs(M1[index])))
+        else: return 100 * (np.abs(M1[index,index] - M2[index,index]) 
+                    / (np.abs(M1[index,index])))
+
 ####################### RUN ########################
 process = psutil.Process(os.getpid())
 stt = time.time()
 NH = .18
 B2 = .0
 #B2 = np.linspace(-.025,.025,6)
-nbins = 20000
+nbins = 5000
 few_groups = 8
-fromH5 = False
+fromH5 = True
+dx = .001
 
 # init class
 print(f"Initializing, {nbins} Groups")
-sp3 = Sp3(nbins, B2, NH, few_groups, fromH5)
+sp3 = Sp3(nbins, B2, NH, few_groups, fromH5, dx)
 sp3.run()
 
 stp = time.time()
