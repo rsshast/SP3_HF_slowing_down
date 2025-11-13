@@ -8,13 +8,14 @@ import math
 import h5py
 from numba import njit, prange
 import psutil
+import torch # tensor decomps, gpu
 
 class Sp3:
     def __init__(self, nbins, B2, NH, few_groups, fromH5, dx):
         self.data_dir = 'data/'
         self.save_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/"
         self.chart_dir = "results/charts/"
-        self.save_data = True
+        self.save_data = False
         self.B2 = B2
         self.E0 = 1e7
         self.Emin = 1
@@ -70,6 +71,10 @@ class Sp3:
         self.L1 = np.zeros_like(self.L0)
         self.L2 = np.zeros_like(self.L0)
         self.L3 = np.zeros_like(self.L0)
+        self.L0 = torch.from_numpy(self.L0)
+        self.L1 = torch.from_numpy(self.L1)
+        self.L2 = torch.from_numpy(self.L2)
+        self.L3 = torch.from_numpy(self.L3)
 
         self.sigma_s_gtg_U = np.zeros((self.leg_order,G-1,G-1))
         self.sigma_s_gtg_H = np.zeros_like(self.sigma_s_gtg_U)
@@ -170,20 +175,20 @@ class Sp3:
     def calc_Ln(self,A,sigma_t, sigma_s, sigma_fr):
         # l x g-1 x g-1 matrix
         phi = np.ones_like(self.p0)
-        stt = time.time()
         sig_t = np.zeros_like(self.p0)
         sig_s = np.zeros_like(self.p0)
         for i in range(phi.size):
             sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
             sig_s[i] = np.trapz(sigma_s[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
 
+        stt = time.time()
         sigma_gtg = self.gen_sig_sn_gtg(A,sig_s,self.leg_order, self.boundaries,
                                         self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
                                         self.alpha_fn(A), self.E0, phi)
 
         print(f"Sigma_gtg A={A} Time: {np.round(time.time()-stt,5)} s")
         # transpose with gp on x axis and g on y axis
-        S = np.transpose(sigma_gtg, (0, 2, 1))          
+        S = np.transpose(sigma_gtg, (0, 2, 1))
 
         if self.save_data: self.save_sig_s_gtg(S,A,self.save_dir,self.NH)
 
@@ -192,13 +197,47 @@ class Sp3:
 
 #        self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
 #        self.plot_each_l(A,sigma_s,sigma_gtg)
+        def _torch_Ln(l,sig_t,S):
+            assert isinstance(S, torch.Tensor), "S must be a torch tensor"
+            return (2 * l + 1) * (sig_t - S)
 
-        self.L0 += self._Ln(0, sig_t, S[0])
-        self.L1 += self._Ln(1, sig_t, S[1])
-        self.L2 += self._Ln(2, sig_t, S[2])
-        self.L3 += self._Ln(3, sig_t, S[3])
+        stt = time.time()
+        sig_t = torch.from_numpy(np.diag(sig_t))
+        self.L0 += _torch_Ln(0, sig_t, torch.from_numpy(S[0]))
+        self.L1 += _torch_Ln(1, sig_t, torch.from_numpy(S[1]))
+        self.L2 += _torch_Ln(2, sig_t, torch.from_numpy(S[2]))
+        self.L3 += _torch_Ln(3, sig_t, torch.from_numpy(S[3]))
 
         print(f"Ln A = {A} Time: {np.round(time.time()-stt,5)} s")
+
+    def calc_phi_torch(self, device = None, dtype = torch.float64):
+        """PyTorch Calculate the fluxes"""
+        if device is None: device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(device)
+
+        if self.device.type=="cuda": print("Calculating phi on GPU")
+        else: print("Calculating phi on CPU")
+
+        chi = torch.from_numpy(self.chi).to(self.device, dtype=dtype)
+        B2 = torch.tensor(self.B2, device=self.device, dtype=dtype)
+
+        # phi0
+        # ----- phi0 -----
+        stt = time.time()
+        B4 = B2 * B2
+        LHS = (9 * B4 + B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) @ self.L0)
+               + self.L3 @ self.L2 @ self.L1 @ self.L0)
+        RHS = (self.L3 @ self.L2 @ self.L1 + B2 * (9 * self.L1 + 4 * self.L3)) @ chi  
+
+        phi0 = torch.linalg.solve(LHS, RHS.unsqueeze(-1)).squeeze(-1)
+        print(f"phi0 Time (torch): {time.time() - stt:.5f} s")
+        self.phi0 = phi0.numpy()
+
+        # phi2
+        LHS = self.L3 @ self.L2
+        RHS = 0.5 * (-9 * B2 * phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ phi0 - chi))
+        phi2 = torch.linalg.solve(LHS, RHS.unsqueeze(-1)).squeeze(-1)
+        self.phi2 = phi2.numpy()
 
     def calc_phi_B2(self):
         print('Calc phi B2')
@@ -334,10 +373,10 @@ class Sp3:
     def save_Ln(self):
         if self.save_data == True:
             with h5py.File(f"{self.save_dir}Ln_{self.NH}.h5", "w") as f:
-                f.create_dataset("L0", data=self.L0,compression="gzip", compression_opts=4)
-                f.create_dataset("L1", data=self.L1,compression="gzip", compression_opts=4)
-                f.create_dataset("L2", data=self.L2,compression="gzip", compression_opts=4)
-                f.create_dataset("L3", data=self.L3,compression="gzip", compression_opts=4)
+                f.create_dataset("L0", data=self.L0.numpy(),compression="gzip", compression_opts=4)
+                f.create_dataset("L1", data=self.L1.numpy(),compression="gzip", compression_opts=4)
+                f.create_dataset("L2", data=self.L2.numpy(),compression="gzip", compression_opts=4)
+                f.create_dataset("L3", data=self.L3.numpy(),compression="gzip", compression_opts=4)
 
     @staticmethod
     def save_grp_vectors(sig_t,sig_t_0,sig_t_2,sig_f, sig_f_0, sig_f_2, chi,save_dir):
@@ -1096,10 +1135,12 @@ class Sp3:
             self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H, self.sigma_fr_H)
             self.save_Ln()
 
-            if isinstance(self.B2, float) or isinstance(self.B2, int):  self.calc_phi()
+            if isinstance(self.B2, float) or isinstance(self.B2, int):  
+                #self.calc_phi()
+                self.calc_phi_torch()
             else: self.calc_phi_B2()
             self.calc_Phi()
-            #self.plot_fluxes()
+            self.plot_fluxes()
             #self.plot_flux_diff_single_axis()
             #self.plot_flux_diff()
             if self.save_data == True: self.save_fluxes()
@@ -1303,9 +1344,9 @@ stt = time.time()
 NH = .18
 B2 = .0
 #B2 = np.linspace(-.025,.025,6)
-nbins = 5000
+nbins = 10000
 few_groups = 8
-fromH5 = True
+fromH5 = False
 dx = .001
 
 # init class
