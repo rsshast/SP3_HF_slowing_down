@@ -218,6 +218,11 @@ class Sp3:
         if self.device.type=="cuda": print("Calculating phi on GPU")
         else: print("Calculating phi on CPU")
 
+        self.L0 = self.L0.to(self.device, dtype=dtype)
+        self.L1 = self.L1.to(self.device, dtype=dtype)
+        self.L2 = self.L2.to(self.device, dtype=dtype)
+        self.L3 = self.L3.to(self.device, dtype=dtype)
+    
         chi = torch.from_numpy(self.chi).to(self.device, dtype=dtype)
         B2 = torch.tensor(self.B2, device=self.device, dtype=dtype)
 
@@ -231,13 +236,15 @@ class Sp3:
 
         phi0 = torch.linalg.solve(LHS, RHS.unsqueeze(-1)).squeeze(-1)
         print(f"phi0 Time (torch): {time.time() - stt:.5f} s")
-        self.phi0 = phi0.numpy()
+        self.phi0 = phi0.cpu().numpy()
 
         # phi2
+        stt = time.time()
         LHS = self.L3 @ self.L2
         RHS = 0.5 * (-9 * B2 * phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ phi0 - chi))
         phi2 = torch.linalg.solve(LHS, RHS.unsqueeze(-1)).squeeze(-1)
-        self.phi2 = phi2.numpy()
+        print(f"phi2 Time (torch): {time.time() - stt:.5f} s")
+        self.phi2 = phi2.cpu().numpy()
 
     def calc_phi_B2(self):
         print('Calc phi B2')
@@ -658,8 +665,8 @@ class Sp3:
     def Dn_coef(self, sig_s1):
         print("Calculating Phi0/Phi2 weighted Diffusion Coefficients")
         stt=time.time()
-        L1_inv = np.linalg.inv(self.L1)
-        L3_inv = np.linalg.inv(self.L1)
+        L1_inv = np.linalg.inv(self.L1.cpu().numpy())
+        L3_inv = np.linalg.inv(self.L1.cpu().numpy())
         N = self.phi0.size
         E = self.Evec[:-1]
         u = self.boundaries
@@ -1344,7 +1351,7 @@ stt = time.time()
 NH = .18
 B2 = .0
 #B2 = np.linspace(-.025,.025,6)
-nbins = 10000
+nbins = 3000
 few_groups = 8
 fromH5 = False
 dx = .001
