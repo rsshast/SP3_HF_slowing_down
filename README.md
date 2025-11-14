@@ -1,4 +1,4 @@
-# Hyperfine SP$_3$ Calculation in Slowing Down Region with Imposed Leakage $B^2$
+# Hyperfine S$P_3$ Calculation in Slowing Down Region with Imposed Leakage $B^2$
 Paper available upon request, please email rsshast@umich.edu
 
 Ravi Shastri, Brian Kiedrowski
@@ -44,7 +44,7 @@ Completed Work:
   * Exported to torch.tensor and GPU
 
 Current work: 
-  * Incorporate Anisotropic Group-Coupled Upscatter to reference and SP$_3$ solutions
+  * Incorporate Anisotropic Group-Coupled Upscatter to reference and S$P_3$ solutions
 
 Future Work:
   * Continuous Energy Monte-Carlo to find buckling parameter $B^2$
