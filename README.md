@@ -1,4 +1,4 @@
-# Hyperfine SP_$3$ Calculation in Slowing Down Region with Imposed Leakage $B^2$
+# Hyperfine SP$_3$ Calculation in Slowing Down Region with Imposed Leakage $B^2$
 Paper available upon request, please email rsshast@umich.edu
 
 Ravi Shastri, Brian Kiedrowski
