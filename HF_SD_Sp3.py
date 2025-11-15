@@ -172,13 +172,13 @@ class Sp3:
         for g in range(self.boundaries.size): gmax_vec[g] = self.group_bound(A,g,lga)
         return gmax_vec
 
-    def calc_Ln(self,A,sigma_t, sigma_s, sigma_fr):
+    def gtg_xs(self,A,sigma_s):
         # l x g-1 x g-1 matrix
         phi = np.ones_like(self.p0)
-        sig_t = np.zeros_like(self.p0)
+        #sig_t = np.zeros_like(self.p0)
         sig_s = np.zeros_like(self.p0)
         for i in range(phi.size):
-            sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
+        #    sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
             sig_s[i] = np.trapz(sigma_s[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
 
         stt = time.time()
@@ -194,56 +194,73 @@ class Sp3:
 
         if A == 1: self.sigma_s_gtg_H = S
         else: self.sigma_s_gtg_U = S
-
 #        self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
 #        self.plot_each_l(A,sigma_s,sigma_gtg)
-        def _torch_Ln(l,sig_t,S):
-            assert isinstance(S, torch.Tensor), "S must be a torch tensor"
-            return (2 * l + 1) * (sig_t - S)
+
+        return S
+
+    def calc_Ln(self,A,sigma_t, sigma_s):
+        S = self.gtg_xs(A,sigma_s)
+        sig_t = np.zeros_like(self.p0)
+        for i in range(sig_t.size):
+            sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
+        sig_t = torch.from_numpy(np.diag(sig_t)) # sig_t is now a torch tensor
+
+        def _torch_Ln(order, sig_t, S, device="auto", dtype=torch.float64, return_numpy=True):
+            if device == "auto":
+                if isinstance(S, torch.Tensor) and S.is_cuda: dev = S.device
+                elif isinstance(sig_t, torch.Tensor) and sig_t.is_cuda: dev = sig_t.device
+                else: dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            else: dev = torch.device(device)
+        
+            sig_t = sig_t.to(dev, dtype=dtype)
+            S_tt = torch.from_numpy(S).to(dev, dtype=dtype)
+        
+            l_vals = torch.arange(order, device=dev, dtype=dtype)
+            factors = (2 * l_vals + 1).view(order, 1, 1)
+            Ln_tt = factors * (sig_t.unsqueeze(0) - S_tt)
+        
+            return Ln_tt.cpu().numpy()
 
         stt = time.time()
-        sig_t = torch.from_numpy(np.diag(sig_t))
-        self.L0 += _torch_Ln(0, sig_t, torch.from_numpy(S[0]))
-        self.L1 += _torch_Ln(1, sig_t, torch.from_numpy(S[1]))
-        self.L2 += _torch_Ln(2, sig_t, torch.from_numpy(S[2]))
-        self.L3 += _torch_Ln(3, sig_t, torch.from_numpy(S[3]))
+        Ln = _torch_Ln(self.leg_order,sig_t,S,device='auto')
+        self.L0, self.L1, self.L2, self.L3 = [Ln[l, :, :] for l in range(self.leg_order)]
 
         print(f"Ln A = {A} Time: {np.round(time.time()-stt,5)} s")
 
-    def calc_phi_torch(self, device = None, dtype = torch.float64):
-        """PyTorch Calculate the fluxes"""
-        if device is None: device = "cuda" if torch.cuda.is_available() else "cpu"
+    def calc_phi_torch(self, device=None, dtype=torch.float64):
+        device = "cuda" if device is None else device
         self.device = torch.device(device)
-
-        if self.device.type=="cuda": print("Calculating phi on GPU")
-        else: print("Calculating phi on CPU")
-
-        self.L0 = self.L0.to(self.device, dtype=dtype)
-        self.L1 = self.L1.to(self.device, dtype=dtype)
-        self.L2 = self.L2.to(self.device, dtype=dtype)
-        self.L3 = self.L3.to(self.device, dtype=dtype)
+    
+        print("Calculating phi on GPU")
+    
+        # Move once, here
+        L0 = torch.from_numpy(self.L0).to(self.device, dtype=dtype)
+        L1 = torch.from_numpy(self.L1).to(self.device, dtype=dtype)
+        L2 = torch.from_numpy(self.L2).to(self.device, dtype=dtype)
+        L3 = torch.from_numpy(self.L3).to(self.device, dtype=dtype)
     
         chi = torch.from_numpy(self.chi).to(self.device, dtype=dtype)
-        B2 = torch.tensor(self.B2, device=self.device, dtype=dtype)
-
+        B2  = torch.tensor(self.B2, device=self.device, dtype=dtype)
+    
         # phi0
-        # ----- phi0 -----
         stt = time.time()
         B4 = B2 * B2
-        LHS = (9 * B4 + B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) @ self.L0)
-               + self.L3 @ self.L2 @ self.L1 @ self.L0)
-        RHS = (self.L3 @ self.L2 @ self.L1 + B2 * (9 * self.L1 + 4 * self.L3)) @ chi  
-
+        LHS = (9 * B4 + B2 * (L3 @ L2 + (9 * L1 + 4 * L3) @ L0)
+               + L3 @ L2 @ L1 @ L0)
+        RHS = (L3 @ L2 @ L1 + B2 * (9 * L1 + 4 * L3)) @ chi
         phi0 = torch.linalg.solve(LHS, RHS.unsqueeze(-1)).squeeze(-1)
         print(f"phi0 Time (torch): {time.time() - stt:.5f} s")
-        self.phi0 = phi0.cpu().numpy()
-
+    
         # phi2
         stt = time.time()
-        LHS = self.L3 @ self.L2
-        RHS = 0.5 * (-9 * B2 * phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ phi0 - chi))
-        phi2 = torch.linalg.solve(LHS, RHS.unsqueeze(-1)).squeeze(-1)
+        LHS2 = L3 @ L2
+        RHS2 = 0.5 * (-9 * B2 * phi0 + (9 * L1 + 4 * L3) @ (L0 @ phi0 - chi))
+        phi2 = torch.linalg.solve(LHS2, RHS2.unsqueeze(-1)).squeeze(-1)
         print(f"phi2 Time (torch): {time.time() - stt:.5f} s")
+    
+        # back to NumPy for the rest of your pipeline
+        self.phi0 = phi0.cpu().numpy()
         self.phi2 = phi2.cpu().numpy()
 
     def calc_phi_B2(self):
@@ -349,7 +366,7 @@ class Sp3:
         plt.clf()
 
     def calc_phi(self, properties = False):
-        print('Calc phi')
+        print("Calculating phi on CPU")
         stt=time.time()
         # phi0
         B4 = self.B2 * self.B2
@@ -665,8 +682,8 @@ class Sp3:
     def Dn_coef(self, sig_s1):
         print("Calculating Phi0/Phi2 weighted Diffusion Coefficients")
         stt=time.time()
-        L1_inv = np.linalg.inv(self.L1.cpu().numpy())
-        L3_inv = np.linalg.inv(self.L1.cpu().numpy())
+        L1_inv = np.linalg.inv(self.L1)
+        L3_inv = np.linalg.inv(self.L1)
         N = self.phi0.size
         E = self.Evec[:-1]
         u = self.boundaries
@@ -1137,14 +1154,15 @@ class Sp3:
         else:
             print(f"Starting calculation. Saving Data = {self.save_data}")
             print('Build Sigma_gtg and Ln for Uranium')
-            self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U, self.sigma_fr_U)
+            self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U)
             print(f'Build Sigma_gtg and Ln for Hydrogen, NH = {self.NH}')
-            self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H, self.sigma_fr_H)
+            self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H)
             self.save_Ln()
 
+            device = "cuda" if torch.cuda.is_available() else "cpu"
             if isinstance(self.B2, float) or isinstance(self.B2, int):  
-                #self.calc_phi()
-                self.calc_phi_torch()
+                if device == "cuda": self.calc_phi_torch()
+                else: self.calc_phi()
             else: self.calc_phi_B2()
             self.calc_Phi()
             self.plot_fluxes()
@@ -1351,7 +1369,7 @@ stt = time.time()
 NH = .18
 B2 = .0
 #B2 = np.linspace(-.025,.025,6)
-nbins = 3000
+nbins = 10000
 few_groups = 8
 fromH5 = False
 dx = .001
