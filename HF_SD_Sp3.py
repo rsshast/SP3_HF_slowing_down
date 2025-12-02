@@ -83,7 +83,7 @@ class Sp3:
         self.L = 10
         self.dx = dx
         self.num_cells = int(self.L / self.dx)
-        self.max_iters = 1000000
+        self.max_iters = 100000
 
     def get_data(self,data, gridpoints):
         data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
@@ -103,9 +103,8 @@ class Sp3:
     def initial_flux(self):
         """Compute the initial scalar flux using scattering source method nuclear engineering handbook method"""
         stt = time.time()
-        #u = self.boundaries
-        u = np.zeros_like(self.p0)
         # Problem setup
+        u = np.zeros_like(self.p0)
         chi = np.zeros_like(self.p0)
         StH = np.zeros_like(self.p0)
         SsH = np.zeros_like(self.p0)
@@ -172,19 +171,19 @@ class Sp3:
         for g in range(self.boundaries.size): gmax_vec[g] = self.group_bound(A,g,lga)
         return gmax_vec
 
-    def gtg_xs(self,A,sigma_s):
+    def gtg_xs(self,A,sigma_s,verbose = False):
         # l x g-1 x g-1 matrix
         phi = np.ones_like(self.p0)
-        #sig_t = np.zeros_like(self.p0)
         sig_s = np.zeros_like(self.p0)
+
         for i in range(phi.size):
-        #    sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
             sig_s[i] = np.trapz(sigma_s[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
 
         stt = time.time()
+        du = np.diff(self.boundaries)
         sigma_gtg = self.gen_sig_sn_gtg(A,sig_s,self.leg_order, self.boundaries,
                                         self.gmax_vec_fn(A,self.lga_fn(self.alpha_fn(A))),
-                                        self.alpha_fn(A), self.E0, phi)
+                                        self.alpha_fn(A), self.E0, phi, du)
 
         print(f"Sigma_gtg A={A} Time: {np.round(time.time()-stt,5)} s")
         # transpose with gp on x axis and g on y axis
@@ -194,18 +193,14 @@ class Sp3:
 
         if A == 1: self.sigma_s_gtg_H = S
         else: self.sigma_s_gtg_U = S
-#        self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
-#        self.plot_each_l(A,sigma_s,sigma_gtg)
+        
+        if verbose:
+            self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
+            self.plot_each_l(A,sigma_s,sigma_gtg)
 
         return S
 
     def calc_Ln(self,A,sigma_t, sigma_s):
-        S = self.gtg_xs(A,sigma_s)
-        sig_t = np.zeros_like(self.p0)
-        for i in range(sig_t.size):
-            sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
-        sig_t = torch.from_numpy(np.diag(sig_t)) # sig_t is now a torch tensor
-
         def _torch_Ln(order, sig_t, S, device="auto", dtype=torch.float64, return_numpy=True):
             if device == "auto":
                 if isinstance(S, torch.Tensor) and S.is_cuda: dev = S.device
@@ -222,6 +217,12 @@ class Sp3:
         
             return Ln_tt.cpu().numpy()
 
+        S = self.gtg_xs(A,sigma_s,verbose=False)
+        sig_t = np.zeros_like(self.p0)
+        for i in range(sig_t.size):
+            sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
+        sig_t = torch.from_numpy(np.diag(sig_t)) # sig_t is now a torch tensor
+
         stt = time.time()
         Ln = _torch_Ln(self.leg_order,sig_t,S,device='auto')
         self.L0, self.L1, self.L2, self.L3 = [Ln[l, :, :] for l in range(self.leg_order)]
@@ -233,8 +234,6 @@ class Sp3:
         self.device = torch.device(device)
     
         print("Calculating phi on GPU")
-    
-        # Move once, here
         L0 = torch.from_numpy(self.L0).to(self.device, dtype=dtype)
         L1 = torch.from_numpy(self.L1).to(self.device, dtype=dtype)
         L2 = torch.from_numpy(self.L2).to(self.device, dtype=dtype)
@@ -259,7 +258,7 @@ class Sp3:
         phi2 = torch.linalg.solve(LHS2, RHS2.unsqueeze(-1)).squeeze(-1)
         print(f"phi2 Time (torch): {time.time() - stt:.5f} s")
     
-        # back to NumPy for the rest of your pipeline
+        # back to numpy
         self.phi0 = phi0.cpu().numpy()
         self.phi2 = phi2.cpu().numpy()
 
@@ -606,7 +605,6 @@ class Sp3:
 
     def phi_weighted_sigma(self, sigma, A, key):
         # start generating few group xs's
-
         def sigma_vec_few_grp(sigma, phi, group_idx, E):
             few_grp_xs = np.zeros((group_idx.size - 1))
             # ensure sigma and phi are the same size
@@ -1186,10 +1184,11 @@ class Sp3:
 
     @staticmethod
     @njit(parallel=True, fastmath=True)
-    def gen_sig_sn_gtg(A, sig_s0, order, boundaries, gmax_vec, alpha, E0, phi, n_sub = 8):
+    def gen_sig_sn_gtg(A, sig_s0, order, boundaries, gmax_vec, alpha, E0, phi, du, n_sub = 8):
+        # du is a vector of differences
         assert order <= 4, (f"Order {order} Not Supproted!")
         G = boundaries.size
-        du = boundaries[1] - boundaries[0]
+        #du = boundaries[1] - boundaries[0]
         den = (1 - alpha) * du
         lga = -np.log(alpha) if A != 1 else np.inf
         sigma_gtg = np.zeros((order, G - 1, G - 1))
@@ -1207,7 +1206,8 @@ class Sp3:
                     y2 = boundaries[g+1]
                     c = max(x1, y1 - lga)
                     length = x2 - c
-                    n_steps_base = int(np.ceil(length / du))
+                    n_steps_base = int(np.ceil(length / du[gp]))
+                    #n_steps_base = int(np.ceil(length / du))
                     if n_steps_base < 1: n_steps_base = 1
                     n_steps = n_steps_base * n_sub
                     dx = length / n_steps
@@ -1250,8 +1250,8 @@ class Sp3:
 
                         acc += val
 
-                    sig_foo = (sig_s0[gp] * phi[gp] * acc * dx ) / (den * phi[gp])
-                    sigma_gtg[l, gp, g] = (sig_s0[gp] * phi[gp] * acc * dx ) / (den * phi[gp])
+                    sig_foo = (sig_s0[gp] * phi[gp] * acc * dx ) / (den[gp] * phi[gp])
+                    sigma_gtg[l, gp, g] = (sig_s0[gp] * phi[gp] * acc * dx ) / (den[gp] * phi[gp])
 
         return sigma_gtg
 
