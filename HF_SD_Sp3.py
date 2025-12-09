@@ -11,55 +11,120 @@ import psutil
 import torch # tensor decomps, gpu
 
 class Sp3:
-    def __init__(self, nbins, B2, NH, few_groups, fromH5, dx):
+    def __init__(self, nbins, B2, NH, few_groups, fromH5, dx, adaptive, xs_tol):
+        # directories
         self.data_dir = 'data/'
         self.save_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/"
         self.chart_dir = "results/charts/"
-        self.save_data = False
+
+        # ranges
         self.B2 = B2
         self.E0 = 1e7
-        self.Emin = 1
-        #self.Emin = 1e-2
-        self.nbins = nbins + 1
+        #self.Emin = 1
+        self.Emin = 1e-2
         self.leg_order = 4
+
+        # number densities
         self.AH = 1
         self.NH = NH
         self.AU = 238
-        self.NU = .06
+        self.NU = 1
+        self.AO = 16
+        self.NO = 1
+        
+        # grp constant parameters
+        self.save_data = False
         self.fromH5 = fromH5
         self.few_groups = few_groups
         self.nu = 2.43
-        assert nbins % few_groups == 0, ("Number of fine bins must be multiple of number of coarse bins")
 
-        chi35 = pd.read_csv(f'{self.data_dir}chi_u235.txt', sep = '\t',header = 0)
-        H1 = pd.read_csv(f'{self.data_dir}xs_h1_T293k.txt', sep  = '\t', header = 0)
-        U238 = pd.read_csv(f'{self.data_dir}xs_u238_T293k.txt',sep  = '\t', header = 0)
+        # point-wise cross-sections and fission spectrum
+        chi35 = pd.read_csv(f'{self.data_dir}chi_u235.txt', sep = '\t', header = 0)
+        H1 = pd.read_csv(f'{self.data_dir}xs_h1_T293k.txt', sep = '\t', header = 0)
+        U238 = pd.read_csv(f'{self.data_dir}xs_u238_T293k.txt',sep = '\t', header = 0)
+        O16 = pd.read_csv(f'{self.data_dir}xs_o16_T293k.csv', sep = ';', dtype=float).to_numpy()
         sigma_f = pd.read_csv(f'{self.data_dir}xs_u238_fission.csv', sep = ',', dtype=float).to_numpy()
         sigma_fr_U = pd.read_csv(f"{self.data_dir}sigma_fr_U.csv",sep = ';', dtype=float).to_numpy()
         sigma_fr_H = pd.read_csv(f"{self.data_dir}sigma_fr_H.csv",sep = ';', dtype=float).to_numpy()
 
+        # interpolations
+        def get_adaptive_Ugrid(data, E0, Emin, tol):
+            data = data[(data[:, 0] <= E0) & (data[:, 0] >= Emin)]
+            data[:, 0] = np.log(E0 / data[:, 0])
+            sort_idx = np.argsort(data[:, 0])
+            data = data[sort_idx]
+            new_grid = [data[0]]  # Start with the first row
+        
+            i = 0
+            while i < data.shape[0] - 1:  # We'll iterate until the second last element
+                found = False
+                for j in range(i + 1, data.shape[0]):
+                    diff = 100 * np.abs(data[i, 1] - data[j, 1]) / data[i, 1]
+                    if diff >= tol:
+                        new_grid.append(data[j])  # append entire row
+                        i = j
+                        found = True
+                        break  # Break inner for-loop when condition is met
+                if not found:
+                    # If no suitable j is found, we are done
+                    break
+
+            return np.array(new_grid)
+
+        def get_adaptive_H_grid(data, new_grid, E0, Emin):
+            # data is hydrogen, new_grid is Uranium
+            data = data[(data[:, 0] <= E0) & (data[:, 0] >= Emin)]
+            data[:, 0] = np.log(E0 / data[:, 0])
+
+            # Sort
+            sort_idx = np.argsort(data[:, 0])
+            data = data[sort_idx]
+            out = np.empty((new_grid.size, data.shape[1]), dtype=float)
+            out[:, 0] = new_grid
+    
+            xp = data[:, 0]
+            for i in range(1, data.shape[1]): out[:, i] = np.interp(new_grid, xp, data[:, i])
+            return out
+
+        # interpolate xs's and chi to U grid. 
+        XS38 = np.array([U238['E'],U238['sigma_t'],U238['sigma_s']]).T
         chi = np.array([chi35['E'],chi35['chi']]).T
         H = np.array([H1['E'],H1['sigma_t'],H1['sigma_s']]).T
-        XS38 = np.array([U238['E'],U238['sigma_t'],U238['sigma_s']]).T
-        chi = self.get_data(chi,self.nbins)
-        H = self.get_data(H,self.nbins)
-        H *= self.NH
-        XS38 = self.get_data(XS38,self.nbins)
+
+        if adaptive == True:
+            XS38 = get_adaptive_Ugrid(XS38,self.E0,self.Emin,xs_tol)
+            self.nbins = XS38.shape[0]
+            H = get_adaptive_H_grid(H,XS38[:,0], self.E0, self.Emin)
+            chi = get_adaptive_H_grid(chi,XS38[:,0], self.E0, self.Emin)
+            XS16 = get_adaptive_H_grid(O16, XS38[:,0], self.E0, self.Emin)
+        else:
+            self.nbins = nbins + 1
+            chi = self.get_data(chi,self.nbins)
+            H = self.get_data(H,self.nbins) * self.NH
+            XS38 = self.get_data(XS38,self.nbins) 
+            XS16 = self.get_data(O16, self.nbins)
+
         self.chi = chi[:,1]
         self.boundaries = XS38[:,0]
-        print(f"du = {self.boundaries[1] - self.boundaries[0]}")
         self.Evec = self.E0 * np.exp(-self.boundaries)
-        self.sigma_fr_U = self.get_data(sigma_fr_U,self.nbins)[:,1]
-        self.sigma_fr_H = self.get_data(sigma_fr_H,self.nbins)[:,1] * NH
+        print(f"Initializing, {self.nbins} Groups")
+        assert (self.nbins - 1) % few_groups == 0, ("Number of fine bins must be multiple of number of coarse bins")
+
+        # cross-sections and number densities
+        self.sigma_fr_U = self.get_data(sigma_fr_U,self.nbins)[:,1] * self.NU
+        self.sigma_fr_H = self.get_data(sigma_fr_H,self.nbins)[:,1] * self.NH
         self.sig_t_U   = self.NU * XS38[:,1]
         self.sig_s0_U  = self.NU * XS38[:,2]
-        self.sig_t_H   = H[:,1]
-        self.sig_s0_H  = H[:,2]
+        self.sig_t_H   = self.NH * H[:,1]
+        self.sig_s0_H  = self.NH * H[:,2]
+        self.sig_t_O   = self.NO * XS16[:,1]
+        self.sig_s0_O  = self.NO * XS16[:,2]
         self.sigma_f   = self.nu * np.flip(self.get_data(sigma_f,self.nbins)[:,1])
         self.T         = 293.15    # degrees Kelvin
         self.k         = 8.617e-5  # eV/K (Boltzmann constant)
         self.kT        = self.k * self.T
 
+        # declare operators
         G = self.boundaries.size
         self.phi0 = np.zeros((G-1))
         self.phi2 = np.zeros_like(self.phi0)
@@ -71,13 +136,15 @@ class Sp3:
         self.L1 = np.zeros_like(self.L0)
         self.L2 = np.zeros_like(self.L0)
         self.L3 = np.zeros_like(self.L0)
-        self.L0 = torch.from_numpy(self.L0)
-        self.L1 = torch.from_numpy(self.L1)
-        self.L2 = torch.from_numpy(self.L2)
-        self.L3 = torch.from_numpy(self.L3)
+        # overwrite to enable cuda
+        #self.L0 = torch.from_numpy(self.L0)
+        #self.L1 = torch.from_numpy(self.L1)
+        #self.L2 = torch.from_numpy(self.L2)
+        #self.L3 = torch.from_numpy(self.L3)
 
         self.sigma_s_gtg_U = np.zeros((self.leg_order,G-1,G-1))
         self.sigma_s_gtg_H = np.zeros_like(self.sigma_s_gtg_U)
+        self.sigma_s_gtg_O = np.zeros_like(self.sigma_s_gtg_U)
 
         # Sp3 Transport Solve Parameters
         self.L = 10
@@ -120,7 +187,8 @@ class Sp3:
             StU[i] = np.trapz(self.sig_t_U[i:i+2],self.boundaries[i:i+2])  / (self.boundaries[i+1] - self.boundaries[i])
             SsU[i] = np.trapz(self.sig_s0_U[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
 
-        du = u[1] - u[0]
+        du = np.diff(self.boundaries)
+        #du = u[1] - u[0]
         alphaU = self.alpha_fn(self.AU)
         inv1ma = 1 / (1 - alphaU)
         lga = -np.log(alphaU)                
@@ -130,25 +198,26 @@ class Sp3:
         phi = np.zeros_like(u, dtype=float)
         scatH = 0
         scatU = 0    
-        gmax = int(np.floor(lga / du))
-        f = (lga / du) - gmax  
+        gmax = int(np.floor(lga / du[0]))
 
         for i in range(u.size):
-            Sigma_R = (StH[i] + StU[i]) - du * (SsU[i] * inv1ma) - du * SsH[i]
+            Sigma_R = (StH[i] + StU[i]) - du[i] * (SsU[i] * inv1ma) - du[i] * SsH[i]
             if i == 0: phi[i] = chi[i] / Sigma_R
     
             # Add scattering sources from previous bin
-            scatH += SsH[i-1] * phi[i-1] * expu[i-1] * du
-            scatU += (SsU[i-1] * inv1ma) * phi[i-1] * expu[i-1] * du
+            scatH += SsH[i-1] * phi[i-1] * expu[i-1] * du[i]
+            scatU += (SsU[i-1] * inv1ma) * phi[i-1] * expu[i-1] * du[i]
     
             # Subtract contributions outside uranium lethargy window
             if i > gmax:
+                f = (lga / du[i]) - gmax  
                 h = i - gmax
-                scatU -= (SsU[h] * inv1ma) * (1 - f) * phi[h] * expu[h] * du
-                scatU -= (SsU[h-1] * inv1ma) * f * phi[h-1] * expu[h-1] * du
+                scatU -= (SsU[h] * inv1ma) * (1 - f) * phi[h] * expu[h] * du[i]
+                scatU -= (SsU[h-1] * inv1ma) * f * phi[h-1] * expu[h-1] * du[i]
     
             phi[i] = (chi[i] + expm[i] * (scatH + scatU)) / Sigma_R
     
+        # set the spectra as class attributes
         self.p0 = phi
         self.chi = chi
 
@@ -192,6 +261,7 @@ class Sp3:
         if self.save_data: self.save_sig_s_gtg(S,A,self.save_dir,self.NH)
 
         if A == 1: self.sigma_s_gtg_H = S
+        elif A == 16: self.sigma_s_gtg_O = S
         else: self.sigma_s_gtg_U = S
         
         if verbose:
@@ -200,7 +270,7 @@ class Sp3:
 
         return S
 
-    def calc_Ln(self,A,sigma_t, sigma_s):
+    def calc_Ln(self,A,sigma_t, sigma_s,verbose):
         def _torch_Ln(order, sig_t, S, device="auto", dtype=torch.float64, return_numpy=True):
             if device == "auto":
                 if isinstance(S, torch.Tensor) and S.is_cuda: dev = S.device
@@ -217,7 +287,7 @@ class Sp3:
         
             return Ln_tt.cpu().numpy()
 
-        S = self.gtg_xs(A,sigma_s,verbose=False)
+        S = self.gtg_xs(A,sigma_s,verbose)
         sig_t = np.zeros_like(self.p0)
         for i in range(sig_t.size):
             sig_t[i] = np.trapz(sigma_t[i:i+2],self.boundaries[i:i+2]) / (self.boundaries[i+1] - self.boundaries[i])
@@ -225,7 +295,11 @@ class Sp3:
 
         stt = time.time()
         Ln = _torch_Ln(self.leg_order,sig_t,S,device='auto')
-        self.L0, self.L1, self.L2, self.L3 = [Ln[l, :, :] for l in range(self.leg_order)]
+        self.L0 += Ln[0,:,:]
+        self.L1 += Ln[1,:,:]
+        self.L2 += Ln[2,:,:]
+        self.L3 += Ln[3,:,:]
+        #self.L0, self.L1, self.L2, self.L3 = [Ln[l, :, :] for l in range(self.leg_order)]
 
         print(f"Ln A = {A} Time: {np.round(time.time()-stt,5)} s")
 
@@ -364,7 +438,7 @@ class Sp3:
         plt.savefig(f"{self.chart_dir}phi2_leakage_flux_diff.png")
         plt.clf()
 
-    def calc_phi(self, properties = False):
+    def calc_phi(self, properties = False,dtype=torch.float64):
         print("Calculating phi on CPU")
         stt=time.time()
         # phi0
@@ -417,9 +491,13 @@ class Sp3:
         print("Saving Data...")
         df = pd.DataFrame({'phi0': self.phi0, 'phi2': self.phi2, 
             'Phi0': self.Phi0, 'Phi2': self.Phi2,
-            'phi_ref': self.p0})
+            'phi_ref': self.p0, 'chi': self.chi})
         df.to_hdf(f"{self.save_dir}fluxes_{self.NH}.h5", key="df", mode="w", format="table")
-        df.to_csv(f"{self.save_dir}fluxes_{self.NH}.csv")
+        #df.to_csv(f"{self.save_dir}fluxes_{self.NH}.csv")
+
+        df = pd.DataFrame({'sigma_t_U': self.sig_t_U, 'sigma_t_H': self.sig_t_H,'sigma_t_O': self.sig_t_O,
+                            'nu_sigma_f': self.sigma_f})
+        df.to_hdf(f"{self.save_dir}fine_group_xs_vectors_{self.NH}.h5", key="df", mode="w", format="table")
 
     def plot_sig_sn_gtg(self, sig_sn_gtg, sig_s0, A):
         Evec = self.Evec[:-1]
@@ -806,7 +884,7 @@ class Sp3:
         pdf = self.get_percent_diff(sig_t_H,sig_t_H_0,0)
         if verbose: print(f"{pdf:5g}, sigma_t H")
 
-        self.Sig_f, self.Sig_f_0, self.Sig_f_2 = self.phi_weighted_sigma(self.sigma_f,self.AU, "nu * sigma_f")
+        self.Sig_f, self.Sig_f_0, self.Sig_f_2 = self.phi_weighted_sigma(self.sigma_f,self.AU, "nu_sigma_f")
         pdf = self.get_percent_diff(self.Sig_f,self.Sig_f_0,0)
         if verbose: print(f"{(pdf/self.nu):5g}, nu * sigma_f")
 
@@ -868,6 +946,29 @@ class Sp3:
                                                         sigma_s3_H, sigma_s3_0_H, sigma_s3_2_H,
                                                         self.AH,self.save_dir,self.NH)
 
+        # Oxygen
+        print("Oxygen Group->Group Few Group Cross-Sections")
+        sigma_s0_O, sigma_s0_0_O, sigma_s0_2_O = self.phi_weighted_sigma_sl(self.sigma_s_gtg_O[0,:,:], self.AO,0)
+        pdf = self.get_percent_diff(sigma_s0_O,sigma_s0_0_O,0)
+        if verbose: print(f"{pdf:5g}, sigma_s0 O")
+
+        sigma_s1_O, sigma_s1_0_O, sigma_s1_2_O = self.phi_weighted_sigma_sl(self.sigma_s_gtg_O[1,:,:], self.AO,1)
+        pdf = self.get_percent_diff(sigma_s1_O,sigma_s1_0_O,0)
+        if verbose: print(f"{pdf:5g}, sigma_s1 O")
+
+        sigma_s2_O, sigma_s2_0_O, sigma_s2_2_O = self.phi_weighted_sigma_sl(self.sigma_s_gtg_O[2,:,:], self.AO,2)
+        pdf = self.get_percent_diff(sigma_s2_O,sigma_s2_0_O,0)
+        if verbose: print(f"{pdf:5g}, sigma_s2 O")
+
+        sigma_s3_O, sigma_s3_0_O, sigma_s3_2_O = self.phi_weighted_sigma_sl(self.sigma_s_gtg_O[3,:,:], self.AO,3)
+        pdf = self.get_percent_diff(sigma_s3_O,sigma_s3_0_O,0)
+        if verbose: print(f"{pdf:5g}, sigma_s3 O")
+
+        if self.save_data == True: self.save_sigma_sl(sigma_s0_O, sigma_s0_0_O, sigma_s0_2_O,
+                                                        sigma_s1_O, sigma_s1_0_O, sigma_s1_2_O,
+                                                        sigma_s2_O, sigma_s2_0_O, sigma_s2_2_O,
+                                                        sigma_s3_O, sigma_s3_0_O, sigma_s3_2_O,
+                                                        self.AO,self.save_dir,self.NH)
         self.Sig_s0 = sigma_s0_U + sigma_s0_H
         self.Sig_s0_0 = sigma_s0_0_U + sigma_s0_0_H
         self.Sig_s0_2 = sigma_s0_2_U + sigma_s0_2_H
@@ -1146,16 +1247,18 @@ class Sp3:
         plt.savefig("New_SP3_solve_phi2.png")
         plt.clf()
 
-    def run(self, transport = False):
+    def run(self, verbose = False, transport = False):
         self.initial_flux()
         if self.fromH5 == True: self.read_data()
         else:
             print(f"Starting calculation. Saving Data = {self.save_data}")
-            print('Build Sigma_gtg and Ln for Uranium')
-            self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U)
+            print(f'Build Sigma_gtg and Ln for Uranium, NU = {self.NU}')
+            self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U,verbose)
             print(f'Build Sigma_gtg and Ln for Hydrogen, NH = {self.NH}')
-            self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H)
-            self.save_Ln()
+            self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H,verbose)
+            print(f'Build Sigma_gtg and Ln for Oxygen, NO = {self.NO}')
+            self.calc_Ln(self.AO, self.sig_t_O, self.sig_s0_O,verbose)
+            if verbose: self.save_Ln()
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             if isinstance(self.B2, float) or isinstance(self.B2, int):  
@@ -1164,8 +1267,9 @@ class Sp3:
             else: self.calc_phi_B2()
             self.calc_Phi()
             self.plot_fluxes()
-            #self.plot_flux_diff_single_axis()
-            #self.plot_flux_diff()
+            if verbose:
+                self.plot_flux_diff_single_axis()
+                self.plot_flux_diff()
             if self.save_data == True: self.save_fluxes()
             self.upd_grp_constants()
 
@@ -1366,18 +1470,20 @@ class Sp3:
 ####################### RUN ########################
 process = psutil.Process(os.getpid())
 stt = time.time()
-NH = .18
+NH = 1
+xs_tol = 5 # percent
 B2 = .0
+nbins = 5000
 #B2 = np.linspace(-.025,.025,6)
-nbins = 10000
 few_groups = 8
 fromH5 = False
 dx = .001
+verbose = False
+adaptive = False
 
 # init class
-print(f"Initializing, {nbins} Groups")
-sp3 = Sp3(nbins, B2, NH, few_groups, fromH5, dx)
-sp3.run()
+sp3 = Sp3(nbins, B2, NH, few_groups, fromH5, dx, xs_tol, adaptive)
+sp3.run(verbose)
 
 stp = time.time()
 print(f"Calculation Time = {np.round((stp - stt),6)}")
