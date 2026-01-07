@@ -11,7 +11,7 @@ import psutil
 import torch # tensor decomps, gpu
 
 class Sp3:
-    def __init__(self, nbins, B2, NH, few_groups, fromH5, dx, adaptive, xs_tol):
+    def __init__(self, nbins, B2, NH, few_groups, fromH5, adaptive, xs_tol):
         # directories
         self.data_dir = 'data/'
         self.save_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/"
@@ -150,12 +150,6 @@ class Sp3:
         self.sigma_s_gtg_U = np.zeros((self.leg_order,G-1,G-1))
         self.sigma_s_gtg_H = np.zeros_like(self.sigma_s_gtg_U)
         self.sigma_s_gtg_O = np.zeros_like(self.sigma_s_gtg_U)
-
-        # Sp3 Transport Solve Parameters
-        self.L = 1
-        self.dx = dx
-        self.num_cells = int(self.L / self.dx)
-        self.max_iters = 100000
 
     def get_data(self,data, gridpoints):
         data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
@@ -1057,456 +1051,6 @@ class Sp3:
 
         if self.save_data == True: self.save_Dn(self.D,self.D0,self.D2,self.save_dir,key=None)
 
-    @staticmethod
-    def solve_sp3_eqns_new(
-        B2: float,
-        D0: np.ndarray, D2: np.ndarray,
-        Sig_t_0: np.ndarray, Sig_t_2: np.ndarray,
-        Sig_s0_0: np.ndarray, Sig_s0_2: np.ndarray, Sig_s2_2: np.ndarray,
-        chi: np.ndarray,
-        nuSigf0: np.ndarray, nuSigf2: np.ndarray,
-        normalize: str = "sum_phi0",  # "sum_phi0" or "sum_scalar"
-        norm_value: float = 1.0,
-    ):
-        """
-        Infinite-medium buckling solve for Eq. (59a/59b):
-          -D0 ∇² Φ0 + (Σt0-Σs0_0) Φ0 = χ(νΣf0·Φ0 - 2 νΣf2·Φ2) + 2(Σt2-Σs0_2) Φ2
-          -D2 ∇² Φ2 + (Σt2-Σs2_2) Φ2 = 2(Σt0 Φ0 - 2Σt2 Φ2) - 2(Σs0_0 Φ0 - 2Σs0_2 Φ2) - 2χ(νΣf0·Φ0 - 2 νΣf2·Φ2)
-    
-        Buckling: -∇² -> B², so -D∇² -> +B² D.
-        Homogeneous system needs a normalization constraint.
-        """
-        G = chi.size
-        chi = chi.astype(np.float64)
-        chi = chi / (chi.sum())
-    
-        # Make diagonal total matrices
-        T0 = np.diag(Sig_t_0)
-        T2 = np.diag(Sig_t_2)
-    
-        # Convenience
-        R00 = (T0 - Sig_s0_0)              # (Σt0 - Σs0_0)
-        C02 = 2.0 * (T2 - Sig_s0_2)        # 2(Σt2 - Σs0_2)
-    
-        # Fission "outer-product" operator pieces:
-        # χ * (nuSigf0·Φ0 - 2 nuSigf2·Φ2) = (χ nuSigf0)Φ0 + (χ * (-2 nuSigf2))Φ2
-        F00 = np.outer(chi, nuSigf0)             # GxG
-        F02 = np.outer(chi, -2.0 * nuSigf2)      # GxG
-    
-        # Build 2Gx2G matrix M59 such that M59 @ [Φ0; Φ2] = 0
-        # Eq (59a): (B² D0 + R00)Φ0  + ( -C02 )Φ2  + ( -F00 Φ0 - F02 Φ2 ) = 0
-        A00 = (B2 * D0) + R00 - F00
-        A02 = (-C02)    - F02
-    
-        # Eq (59b): (B² D2 + (T2 - S2_2) + 4T2 -4S0_2)Φ2 + (-2T0 +2S0_0)Φ0 + 2χ(...) = 0
-        # The "+2χ(...)" contributes +2*F00 Φ0 +2*F02 Φ2
-        B20 = (-2.0 * T0) + (2.0 * Sig_s0_0) + (2.0 * F00)
-        B22 = (B2 * D2) + (T2 - Sig_s2_2) + (4.0 * T2) - (4.0 * Sig_s0_2) + (2.0 * F02)
-    
-        M = np.block([[A00, A02],
-                      [B20, B22]]).astype(np.float64)
-    
-        # Add normalization constraint by replacing one row
-        b = np.zeros(2*G, dtype=np.float64)
-    
-        if normalize == "sum_phi0":
-            # enforce sum_g Φ0_g = norm_value
-            M[0, :] = 0.0
-            M[0, 0:G] = 1.0
-            b[0] = norm_value
-        elif normalize == "sum_scalar":
-            # enforce sum_g (ϕ_g) = sum_g(Φ0_g - 2Φ2_g) = norm_value
-            M[0, :] = 0.0
-            M[0, 0:G] = 1.0
-            M[0, G:2*G] = -2.0
-            b[0] = norm_value
-        else:
-            raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
-    
-        x = np.linalg.solve(M, b)
-        Phi0 = x[:G]
-        Phi2 = x[G:]
-        return Phi0, Phi2
-
-    @staticmethod
-    def solve_sp3_eqns_conventional(
-        B2: float,
-        D: np.ndarray,
-        Sig_t: np.ndarray,
-        Sig_s0: np.ndarray,
-        Sig_s2: np.ndarray,
-        chi: np.ndarray,
-        nuSigf: np.ndarray,
-        normalize: str = "sum_phi0",
-        norm_value: float = 1.0,
-    ):
-        """
-        Infinite-medium buckling solve for conventional Eq. (61a/61b):
-    
-          -D ∇² Φ0 + (Σt-Σs0)Φ0 = χ νΣf (Φ0-2Φ2) + 2(Σt-Σs0)Φ2
-          -D ∇² Φ2 + (Σt-Σs2)Φ2 = 2(Σt-Σs0)(Φ0-2Φ2) - 2 χ νΣf (Φ0-2Φ2)
-    
-        We implement χ νΣf (Φ0-2Φ2) as outer(χ,nuSigf) @ (Φ0-2Φ2).
-        """
-        G = chi.size
-        chi = chi.astype(np.float64)
-        chi = chi / (chi.sum() + 1e-300)
-    
-        T = np.diag(Sig_t)
-        R0 = (T - Sig_s0)
-        R2 = (T - Sig_s2)
-    
-        F = np.outer(chi, nuSigf)   # χ * (nuSigf·something)
-    
-        # Let s = (Φ0 - 2Φ2). Then fission term is F @ s.
-        # Eq61a: (B²D + R0)Φ0  - 2R0 Φ2  - F(Φ0 - 2Φ2) = 0
-        A00 = (B2 * D) + R0 - F
-        A02 = (-2.0 * R0) + (2.0 * F)
-    
-        # Eq61b: (B²D + R2)Φ2  - 2R0(Φ0 - 2Φ2) + 2F(Φ0 - 2Φ2) = 0
-        # Expand: (-2R0 + 2F)Φ0 + (B²D + R2 + 4R0 - 4F)Φ2 = 0
-        B20 = (-2.0 * R0) + (2.0 * F)
-        B22 = (B2 * D) + R2 + (4.0 * R0) - (4.0 * F)
-    
-        M = np.block([[A00, A02],
-                      [B20, B22]]).astype(np.float64)
-    
-        b = np.zeros(2*G, dtype=np.float64)
-        if normalize == "sum_phi0":
-            M[0, :] = 0.0
-            M[0, 0:G] = 1.0
-            b[0] = norm_value
-        elif normalize == "sum_scalar":
-            M[0, :] = 0.0
-            M[0, 0:G] = 1.0
-            M[0, G:2*G] = -2.0
-            b[0] = norm_value
-        else:
-            raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
-    
-        x = np.linalg.solve(M, b)
-        return x[:G], x[G:]
-    
-    def finite_difference(self,tol=1e-5,omega=0.25):
-        print("Begin Finite Difference Sweep")
-        def sp3_block_thomas(
-            D0, D2, A00, A02, A20, A22, dx, N,
-            Q0=None, Q2=None, shift=0.0, pin=None, pin_value=1.0
-        ):
-            G = D0.shape[0]; m = 2*G; dx2 = dx*dx
-        
-            # Blocks common to all rows
-            D0_off = (1.0/dx2) * D0
-            D2_off = (1.0/dx2) * D2
-            OFF = -np.block([[D0_off, np.zeros((G,G))],
-                             [np.zeros((G,G)), D2_off]])            # −D_off
-            CENTER = np.block([[ (2.0/dx2)*D0,            np.zeros((G,G))],
-                               [ np.zeros((G,G)),          (2.0/dx2)*D2]]) \
-                     + np.block([[A00, A02],
-                                 [A20, A22]])                        # 2*D_off + A
-        
-            # Allocate variable tri-diagonal arrays
-            Atil = np.empty((N, m, m))
-            B    = np.empty((N, m, m))   # lower
-            C    = np.empty((N, m, m))   # upper
-            rhs  = np.zeros((N, m))
-        
-            # Fill interior rows
-            for i in range(N):
-                Atil[i] = CENTER
-                B[i]    = OFF
-                C[i]    = OFF
-                if shift > 0.0:
-                    Atil[i, np.arange(m), np.arange(m)] += shift
-        
-            # Correct Neumann BCs: double the edge neighbor coupling, not the diagonal
-            B[0][:]      = 0.0                # no lower neighbor for i=0
-            C[0][:]      = 2.0 * OFF          # couple twice to i=1
-        
-            C[N-1][:]    = 0.0                # no upper neighbor for i=N-1
-            B[N-1][:]    = 2.0 * OFF          # couple twice to i=N-2
-        
-            # Sources
-            if Q0 is not None: rhs[:, :G] = Q0
-            if Q2 is not None: rhs[:, G:] = Q2
-        
-            # Optional pin (inhomogeneous row)
-            if pin is not None:
-                i_pin, comp = pin
-                Atil[i_pin,:,:] = 0.0
-                Atil[i_pin, comp, comp] = 1.0
-                rhs[i_pin,:] = 0.0
-                rhs[i_pin, comp] = pin_value
-        
-            # Forward elimination
-            for i in range(1, N):
-                T = np.linalg.solve(Atil[i-1], B[i])        # A_{i-1}^{-1} B_i
-                Atil[i] = Atil[i] - C[i-1] @ T
-                rhs[i]  = rhs[i]  - C[i-1] @ np.linalg.solve(Atil[i-1], rhs[i-1])
-        
-            # Back substitution
-            X = np.zeros((N, m))
-            X[-1] = np.linalg.solve(Atil[-1], rhs[-1])
-            for i in range(N-2, -1, -1):
-                X[i] = np.linalg.solve(Atil[i], rhs[i] - C[i] @ X[i+1])
-        
-            return X[:, :G], X[:, G:]
-        
-        G, N = self.few_groups, self.num_cells
-        Phi0 = np.ones((N, G)); Phi2 = np.ones((N, G))
-        dx2 = self.dx * self.dx
-    
-        # Matrices (GxG), make sure Sig_f_* include ν; if not, multiply by nu
-        Sig_t_0 = np.diag(self.Sig_t_0)
-        Sig_t_2 = np.diag(self.Sig_t_2)
-        S00 = self.Sig_s0_0
-        S02 = self.Sig_s0_2
-        S22 = self.Sig_s2_2
-        chi = self.Chi / np.sum(self.Chi)
-        F0 = np.outer(chi, self.Sig_f_0)   # χ νΣf^0
-        F2 = np.outer(chi, self.Sig_f_2)   # χ νΣf^2
-        
-        # A-blocks from the equations above
-        A00 = (Sig_t_0 - S00) - F0
-        A02 = -2*(Sig_t_2 - S02) + 2*F2
-        A20 = -2*Sig_t_0 + 2*S00 + 2*F0
-        A22 = (Sig_t_2 - S22) + 4*Sig_t_2 - 4*S02 - 4*F2
-        stt_transport = time.time()
-        # initial guess (positive)
-        Phi0 = np.ones((N,G))
-        Phi2 = np.zeros((N,G))
-        k = 1.0
-    
-        # diag fission operators (if F0,F2 are vectors)
-        F0m = np.diag(F0) if F0.ndim == 1 else F0
-        F2m = np.diag(F2) if F2.ndim == 1 else F2
-    
-        # helper: compute fission production at each cell (G-vector)
-        def fiss_src(P0_i, P2_i):
-            return chi * (F0m @ P0_i - 2.0*(F2m @ P2_i))  # (G,)
-    
-        # Outer power iteration
-        max_outer = 200
-        tol_k=1e-8
-        tol_phi=1e-8
-        for it in range(max_outer):
-            Phi0_old = Phi0.copy()
-            Phi2_old = Phi2.copy()
-            k_old = k
-    
-            # build Q0,Q2 from old fluxes
-            Q0 = np.zeros((N,G))
-            Q2 = np.zeros((N,G))
-            for i in range(N):
-                q = fiss_src(Phi0_old[i], Phi2_old[i])
-                Q0[i] = q / k
-                Q2[i] = (-2.0*q) / k
-    
-            # solve fixed-source system with Thomas (your corrected Neumann BC version)
-            Phi0, Phi2 = sp3_block_thomas(
-                D0=self.D0, D2=self.D2,
-                A00=A00, A02=A02, A20=A20, A22=A22,
-                dx=self.dx, N=N,
-                Q0=Q0, Q2=Q2,
-                pin=None, shift=0.0
-            )
-    
-            # update k by Rayleigh quotient (ratio of new to old production)
-            # (any consistent inner product works; this is a common choice)
-            P_new = 0.0
-            P_old = 0.0
-            for i in range(N):
-                P_new += np.sum(fiss_src(Phi0[i],   Phi2[i]))
-                P_old += np.sum(fiss_src(Phi0_old[i], Phi2_old[i]))
-            k = k_old * (P_new / (P_old + 1e-300))
-    
-            # normalize flux to prevent overflow/underflow
-            norm = np.max(Phi0)
-            if norm > 0:
-                Phi0 /= norm
-                Phi2 /= norm
-    
-            # convergence checks
-            dk = abs(k - k_old) / (abs(k_old) + 1e-300)
-            dphi = np.max(np.abs(Phi0 - Phi0_old))
-            print(f"it={it+1}  k={k:.10f}  rel_dk={dk:.3e}  dphi_inf={dphi:.3e}")
-    
-            if dk < tol_k and dphi < tol_phi:
-                break
-    
-        print(k)
-
-        """
-        Q0 = np.ones((N, G), dtype=np.float64)   # uniform source in all groups
-        Q2 = np.zeros((N, G), dtype=np.float64)
-        Phi0, Phi2 = sp3_block_thomas(self.D0, self.D2, A00, A02, A20, A22,
-                              self.dx, self.num_cells, Q0=Q0, Q2=Q2,
-                              pin=None, shift=0.0)
-        
-        print(Phi0.shape)
-        print(Phi2.shape)
-        """
-        #print(Phi0,Phi2)
-        # Diffusion blocks
-        #D0 = self.D0
-        #D2 = self.D2
-        #D0_diag = (2.0/dx2) * D0
-        #D2_diag = (2.0/dx2) * D2
-        #D0_off  = (1.0/dx2) * D0
-        #D2_off  = (1.0/dx2) * D2
-       # 
-       # # Per-cell center matrix (constant across i)
-       # M = np.block([[D0_diag + A00,  A02],
-       #               [A20,            D2_diag + A22]])
-       # 
-       # Minv = np.linalg.inv(M)      # outside Numba, once
-   # 
-   #     gs_sor_fd(Phi0, Phi2, D0_off, D2_off, Minv, self.max_iters, tol, omega)
-
-        """
-        # being finite difference for new method
-        Phi0 = np.ones((self.num_cells,self.few_groups)) 
-        Phi2 = np.ones((self.num_cells,self.few_groups))
-
-        # build data
-        sig_t_0 = np.diag(self.Sig_t_0)
-        sig_t_2 = np.diag(self.Sig_t_2)
-        sig_s0_0 = (self.Sig_s0_0)
-        sig_s0_2 = (self.Sig_s0_2)
-        sig_s2_0 = (self.Sig_s2_0)
-        sig_s2_2 = (self.Sig_s2_2)
-        chi = self.Chi
-        sig_f_0 = self.Sig_f_0
-        sig_f_2 = self.Sig_f_2
-
-        # NEGATIVE BUILT IN HERE
-        D0_inv = np.linalg.inv(self.D0)
-        D2_inv = np.linalg.inv(self.D2)
-        dx2 = self.dx * self.dx
-
-        it = 0
-        converged = False
-        print(f"Length: {self.L}cm, dx: {self.dx}, Num Nodes: {self.num_cells}")
-        stt_transport = time.time()
-        # begin Jacobi Solve
-        while not converged and it < self.max_iters:
-            # Reflecting BC
-            Phi0[0,:]  = Phi0[1,:]
-            Phi2[0,:]  = Phi2[1,:]
-            Phi0[-1,:] = Phi0[-2,:]
-            Phi2[-1,:] = Phi2[-2,:]
-            phi0_prev = Phi0.copy()
-            phi2_prev = Phi2.copy()
-            for i in range(1,self.num_cells-1):
-                # Phi0(position, Energy)
-                t1 = (sig_t_0 - sig_s0_0) @ phi0_prev[i,:]
-                t2 = np.outer(chi,sig_f_0) @ phi0_prev[i,:] - 2 * np.outer(chi,sig_f_2) @ phi2_prev[i,:]
-                t3 = 2 * (sig_t_2 - sig_s0_2) @ phi0_prev[i,:]
-                RHS = (dx2 * D0_inv) @ (-t1 + t2 + t3)
-                Phi0[i+1,:] = 2 * phi0_prev[i,:] - phi0_prev[i-1,:] + RHS 
-    
-                # Phi2(position, Energy)
-                t1 = (sig_t_2 - sig_s2_2) @ phi2_prev[i,:]
-                t2 = sig_t_0 @ phi0_prev[i,:] - 2 * (sig_t_2 @ phi2_prev[i,:])
-                t3 = sig_s0_0 @ phi0_prev[i,:] - 2 * (sig_s0_2 @ phi2_prev[i,:])
-                t4 = np.outer(chi, sig_f_0) @ phi0_prev[i,:] - 2 * np.outer(chi,sig_f_2) @ phi2_prev[i,:]
-                RHS = (2 * dx2 * D2_inv) @ (-t1 + t2 -t3 - t4)
-                Phi2[i+1,:] = 2 * phi2_prev[i,:] - phi2_prev[i-1,:] + RHS
-
-            # Reflecting BC
-            Phi0[0,:]  = Phi0[1,:]
-            Phi2[0,:]  = Phi2[1,:]
-            Phi0[-1,:] = Phi0[-2,:]
-            Phi2[-1,:] = Phi2[-2,:]
-
-            L2_0 = self.L2_norm(phi0_prev,Phi0)
-            L2_2 = self.L2_norm(phi2_prev,Phi2)
-            print(f"L2 Phi0={L2_0:.5e}, Phi2={L2_2:.5e}, it={it+1}")
-            converged = (max(L2_0, L2_2) < tol)
-
-            if max(L2_0, L2_2) > 1e3: raise ValueError("Sp3 Solve is Diverging")
-            it += 1
-        while not converged and it < self.max_iters:
-            # enforce reflecting BCs on the *previous* iterate
-            Phi0[0,:]  = Phi0[1,:]
-            Phi2[0,:]  = Phi2[1,:]
-            Phi0[-1,:] = Phi0[-2,:]
-            Phi2[-1,:] = Phi2[-2,:]
-    
-            phi0_prev = Phi0.copy()
-            phi2_prev = Phi2.copy()
-    
-            Phi0_new = phi0_prev.copy()
-            Phi2_new = phi2_prev.copy()
-    
-            # build once
-            F0 = np.outer(chi, sig_f_0)
-            F2 = np.outer(chi, sig_f_2)
-    
-            # update the *center* i using neighbors from prev (pure Jacobi)
-            for i in range(1, self.num_cells - 1):
-                t1_0 = (sig_t_0 - sig_s0_0) @ phi0_prev[i,:]
-                t2_0 = F0 @ phi0_prev[i,:] - 2.0 * (F2 @ phi2_prev[i,:])
-                t3_0 = 2.0 * (sig_t_2 - sig_s0_2) @ phi0_prev[i,:]
-    
-                # discrete Laplacian φ'' ≈ (φ_{i+1} - 2 φ_i + φ_{i-1}) / dx^2
-                # Solve D0 * φ'' = (-t1 + t2 + t3)  =>  φ'' = D0_inv @ (-t1 + t2 + t3)
-                rhs0 = dx2 * (D0_inv @ (-t1_0 + t2_0 + t3_0))
-                Phi0_cand = (phi0_prev[i+1,:] - 2.0*phi0_prev[i,:] + phi0_prev[i-1,:]) + rhs0
-                # Rearrange to update the center:
-                Phi0_new[i,:] = phi0_prev[i,:] + 0.5 * (Phi0_cand)  
-    
-                t1_2 = (sig_t_2 - sig_s2_2) @ phi2_prev[i,:]
-                t2_2 = (sig_t_0 @ phi0_prev[i,:]) - 2.0 * (sig_t_2 @ phi2_prev[i,:])
-                t3_2 = (sig_s0_0 @ phi0_prev[i,:]) - 2.0 * (sig_s0_2 @ phi2_prev[i,:])
-                t4_2 = F0 @ phi0_prev[i,:] - 2.0 * (F2 @ phi2_prev[i,:])
-    
-                rhs2 = 2.0 * dx2 * (D2_inv @ (-t1_2 + t2_2 - t3_2 - t4_2))
-                Phi2_cand = (phi2_prev[i+1,:] - 2.0*phi2_prev[i,:] + phi2_prev[i-1,:]) + rhs2
-                Phi2_new[i,:] = phi2_prev[i,:] + 0.5 * (Phi2_cand)
-    
-            # reflecting BCs on the *new* iterate
-            Phi0_new[0,:]  = Phi0_new[1,:]
-            Phi2_new[0,:]  = Phi2_new[1,:]
-            Phi0_new[-1,:] = Phi0_new[-2,:]
-            Phi2_new[-1,:] = Phi2_new[-2,:]
-    
-            # under-relax
-            Phi0 = (1 - omega) * phi0_prev + omega * Phi0_new
-            Phi2 = (1 - omega) * phi2_prev + omega * Phi2_new
-    
-            L2_0 = self.L2_norm(phi0_prev, Phi0)
-            L2_2 = self.L2_norm(phi2_prev, Phi2)
-            print(f"L2 Phi0={L2_0:.5e}, Phi2={L2_2:.5e}, it={it+1}")
-    
-            converged = (max(L2_0, L2_2) < tol)
-            if max(L2_0, L2_2) > 1e3:
-                raise ValueError("Sp3 Solve is Diverging")
-            it += 1
-        """
-        
-        #return k, Phi0, Phi2
-        print(f"Convergence Time: {np.round(time.time() - stt_transport, 5)} seconds")
-        nodes = np.linspace(0,self.L,self.num_cells)
-        phi0 = Phi0 - 2*Phi2
-        plt.figure()
-        for g in range(self.few_groups): plt.plot(nodes,phi0[:,g],label=fr"$\Phi_0$, g = {g+1}")
-        plt.xlabel("Position (cm)")
-        plt.ylabel(r"$\phi_0 (x,g)$")
-        plt.legend()
-        plt.grid(which="Both")
-        plt.savefig("New_SP3_solve_phi0.png")
-        plt.clf()
-
-        plt.figure()
-        for g in range(self.few_groups): plt.plot(nodes,Phi2[:,g],label=fr"$\phi_2$, g = {g+1}")
-        plt.xlabel("Position (cm)")
-        plt.ylabel(r"$\phi_2 (x,g)$")
-        plt.legend()
-        plt.grid(which="Both")
-        plt.savefig("New_SP3_solve_phi2.png")
-        plt.clf()
-
     def run(self, verbose = False, transport = False):
         self.initial_flux()
         if self.fromH5 == True: self.read_data()
@@ -1535,9 +1079,9 @@ class Sp3:
             self.upd_grp_constants()
 
         # few group fluxes
-        Phi0_fg, Phi2_fg = self.few_group_fluxes(key=None)
-        #if transport: self.finite_difference()
-        Phi0_sp3_new, Phi2_sp3_new = self.solve_sp3_eqns_new(
+        phi0_fg, phi2_fg = self.few_group_fluxes(key=None)
+        print("Comparing FG Constants")
+        phi0_sp3_new, phi2_sp3_new = self.solve_sp3_eqns_new(
             self.B2,
             self.D0, self.D2,
             self.Sig_t_0, self.Sig_t_2,
@@ -1545,7 +1089,7 @@ class Sp3:
             self.Chi,
             self.Sig_f_0, self.Sig_f_2)
 
-        Phi0_sp3_conv, Phi2_sp3_conv = self.solve_sp3_eqns_conventional(
+        phi0_sp3_conv, phi2_sp3_conv = self.solve_sp3_eqns_conventional(
             self.B2,
             self.D,
             self.Sig_t,
@@ -1558,21 +1102,33 @@ class Sp3:
         # plot and compare
         Efg = np.exp(np.linspace(np.log(self.Emin),np.log(self.E0),self.few_groups+1))
         Efg = np.flip(Efg)
+
         plt.figure(figsize=(8,6))
-
-        plt.step(Efg[:-1], Phi0_sp3_new, where='post', label=r'$\Phi_0^{new}$')
-        plt.step(Efg[:-1], Phi0_sp3_conv, where='post', label=r'$\Phi_0^{conv}$')
-
+        plt.step(Efg[:-1], phi0_sp3_new, where='post', label=r'$\phi_0^{new}$')
+        plt.step(Efg[:-1], phi0_sp3_conv, where='post', label=r'$\phi_0^{conv}$')
+        plt.title(f"Scalar Flux, B2 = {self.B2}")
         plt.xlabel('Energy (MeV)')
-        plt.ylabel(r'$\Phi_0$')
+        plt.ylabel(r'$\phi_0$')
         plt.legend()
         plt.grid(True, which='both')
-
         plt.xscale('log')
-        plt.savefig("sp3_fg_Phi0_comp.png")
+        plt.savefig(f"{self.chart_dir}sp3_fg_phi0_comp.png")
+        plt.clf()
 
+        plt.figure(figsize=(8,6))
+        plt.title(f"Scalar Flux 2nd Moment, B2 = {self.B2}")
+        plt.step(Efg[:-1], phi2_sp3_new, where='post', label=r'$\phi_2^{new}$')
+        plt.step(Efg[:-1], phi2_sp3_conv, where='post', label=r'$\phi_2^{conv}$')
+        plt.xlabel('Energy (MeV)')
+        plt.ylabel(r'$\phi_2$')
+        plt.legend()
+        plt.grid(True, which='both')
+        plt.xscale('log')
+        plt.savefig(f"{self.chart_dir}sp3_fg_phi2_comp.png")
+        plt.clf()
 
-#        print(Phi0_sp3_new,Phi0_sp3_conv)
+        print(f"L2 Norm on Conventional and New SP3 Equations, phi0: {self.L2_norm(phi0_sp3_new, phi0_sp3_conv)}")
+        print(f"L2 Norm on Conventional and New SP3 Equations, phi2: {self.L2_norm(phi2_sp3_new, phi2_sp3_conv)}")
 
     @staticmethod
     def alpha_fn(A): return ((A - 1.0)/(A + 1.0)) ** 2
@@ -1764,22 +1320,120 @@ class Sp3:
         else: return 100 * (np.abs(M1[index,index] - M2[index,index]) 
                     / (np.abs(M1[index,index])))
 
+    @staticmethod
+    def solve_sp3_eqns_new(
+        B2: float,
+        D0: np.ndarray, D2: np.ndarray,
+        Sig_t_0: np.ndarray, Sig_t_2: np.ndarray,
+        Sig_s0_0: np.ndarray, Sig_s0_2: np.ndarray, Sig_s2_2: np.ndarray,
+        chi: np.ndarray,
+        nuSigf0: np.ndarray, nuSigf2: np.ndarray,
+        normalize: str = "sum_phi0",  # "sum_phi0" or "sum_scalar"
+        norm_value: float = 1.0,
+    ): 
+        """Infinite-medium buckling solve for Eq. (59a/59b):"""
+        G = chi.size
+        chi = chi.astype(np.float64)
+        chi = chi / (chi.sum())
+    
+        # Make diagonal total matrices
+        T0 = np.diag(Sig_t_0)
+        T2 = np.diag(Sig_t_2)
+        R00 = (T0 - Sig_s0_0)       
+        C02 = 2.0 * (T2 - Sig_s0_2)     
+    
+        F00 = np.outer(chi, nuSigf0)            
+        F02 = np.outer(chi, -2.0 * nuSigf2)     
+    
+        A00 = (B2 * D0) + R00 - F00
+        A02 = (-C02)    - F02
+        B20 = (-2.0 * T0) + (2.0 * Sig_s0_0) + (2.0 * F00)
+        B22 = (B2 * D2) + (T2 - Sig_s2_2) + (4.0 * T2) - (4.0 * Sig_s0_2) + (2.0 * F02)
+    
+        M = np.block([[A00, A02],
+                      [B20, B22]]).astype(np.float64)
+    
+        # add normalization constraint by replacing one row
+        b = np.zeros(2*G, dtype=np.float64)
+    
+        if normalize == "sum_phi0":
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            b[0] = norm_value
+        elif normalize == "sum_scalar":
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            M[0, G:2*G] = -2.0
+            b[0] = norm_value
+        else:
+            raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
+    
+        x = np.linalg.solve(M, b)
+        Phi0 = x[:G]
+        Phi2 = x[G:]
+        return Phi0, Phi2
+
+    @staticmethod
+    def solve_sp3_eqns_conventional(
+        B2: float,
+        D: np.ndarray,
+        Sig_t: np.ndarray,
+        Sig_s0: np.ndarray,
+        Sig_s2: np.ndarray,
+        chi: np.ndarray,
+        nuSigf: np.ndarray,
+        normalize: str = "sum_phi0",
+        norm_value: float = 1.0,
+    ): 
+        """Infinite-medium buckling solve for conventional Eq. (61a/61b):"""
+        G = chi.size
+        chi = chi.astype(np.float64)
+        chi = chi / (chi.sum() + 1e-300)
+    
+        T = np.diag(Sig_t)
+        R0 = (T - Sig_s0)
+        R2 = (T - Sig_s2)
+    
+        F = np.outer(chi, nuSigf)
+    
+        A00 = (B2 * D) + R0 - F
+        A02 = (-2.0 * R0) + (2.0 * F)
+        B20 = (-2.0 * R0) + (2.0 * F)
+        B22 = (B2 * D) + R2 + (4.0 * R0) - (4.0 * F)
+    
+        M = np.block([[A00, A02],
+                      [B20, B22]]).astype(np.float64)
+    
+        b = np.zeros(2*G, dtype=np.float64)
+        if normalize == "sum_phi0":
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            b[0] = norm_value
+        elif normalize == "sum_scalar":
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            M[0, G:2*G] = -2.0
+            b[0] = norm_value
+        else: raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
+    
+        x = np.linalg.solve(M, b)
+        return x[:G], x[G:]
+    
 ####################### RUN ########################
 process = psutil.Process(os.getpid())
 stt = time.time()
 NH = 1
 xs_tol = 5 # percent
-B2 = .0
-nbins = 15000
+B2 = .01
+nbins = 20000
 #B2 = np.linspace(-.025,.025,6)
 few_groups = 8
 fromH5 = False
-dx = .0005
 verbose = False
 adaptive = False
 
 # init class
-sp3 = Sp3(nbins, B2, NH, few_groups, fromH5, dx, xs_tol, adaptive)
+sp3 = Sp3(nbins, B2, NH, few_groups, fromH5, adaptive, xs_tol)
 sp3.run(verbose)
 
 stp = time.time()
