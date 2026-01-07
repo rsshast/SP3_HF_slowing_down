@@ -20,17 +20,22 @@ class Sp3:
         # ranges
         self.B2 = B2
         self.E0 = 1e7
-        #self.Emin = 1
-        self.Emin = 1e-2
+        self.Emin = 1
+        #self.Emin = 1e-2
         self.leg_order = 4
 
         # number densities
         self.AH = 1
-        self.NH = NH
+        self.NH = 2 / 3
+        #self.NH = 1 / 9
         self.AU = 238
-        self.NU = 1
+        #self.NU = 1
+        self.NU = 1/3
+        #self.NU = 10.97 / 270
         self.AO = 16
-        self.NO = 1
+        #self.NO = 1
+        #self.NO = self.NH / 2
+        self.NO = self.NH * 2
         
         # grp constant parameters
         self.save_data = False
@@ -107,7 +112,7 @@ class Sp3:
         self.chi = chi[:,1]
         self.boundaries = XS38[:,0]
         self.Evec = self.E0 * np.exp(-self.boundaries)
-        print(f"Initializing, {self.nbins} Groups")
+        print(f"Initializing, {self.nbins - 1} Groups")
         assert (self.nbins - 1) % few_groups == 0, ("Number of fine bins must be multiple of number of coarse bins")
 
         # cross-sections and number densities
@@ -147,7 +152,7 @@ class Sp3:
         self.sigma_s_gtg_O = np.zeros_like(self.sigma_s_gtg_U)
 
         # Sp3 Transport Solve Parameters
-        self.L = 10
+        self.L = 1
         self.dx = dx
         self.num_cells = int(self.L / self.dx)
         self.max_iters = 100000
@@ -222,6 +227,18 @@ class Sp3:
         self.chi = chi
 
         print(f"Initial Flux Time: {np.round(time.time()-stt,5)} s")
+        """
+        plt.figure(figsize=(8,6))
+        plt.plot(self.Eplot, self.chi, label=r'$\chi$')
+        plt.title(r'$^{235}$U Fission Spectrum $\chi (E)$')
+        plt.xlabel('Energy [eV]')
+        plt.ylabel(r'$\chi (E)$')
+        plt.xscale('log')
+        plt.grid(True, which='both')
+        plt.legend()
+        plt.savefig(f"{self.chart_dir}chi.png")   
+        plt.clf()
+
         plt.figure()
         plt.plot(self.Eplot, self.p0, label=r'$\phi_0$')
         plt.title(r'Initial Scalar Flux $\phi_0(E)$')
@@ -231,6 +248,7 @@ class Sp3:
         plt.grid(True, which='both')
         plt.legend()
         plt.savefig(f"{self.chart_dir}initial_flux.png")   
+        """
 
     def group_bound(self, A, g, lga): return (self.boundaries.size if A == 1
                 else 1 + np.searchsorted(self.boundaries, self.boundaries[g] + lga))
@@ -299,7 +317,6 @@ class Sp3:
         self.L1 += Ln[1,:,:]
         self.L2 += Ln[2,:,:]
         self.L3 += Ln[3,:,:]
-        #self.L0, self.L1, self.L2, self.L3 = [Ln[l, :, :] for l in range(self.leg_order)]
 
         print(f"Ln A = {A} Time: {np.round(time.time()-stt,5)} s")
 
@@ -438,18 +455,22 @@ class Sp3:
         plt.savefig(f"{self.chart_dir}phi2_leakage_flux_diff.png")
         plt.clf()
 
-    def calc_phi(self, properties = False,dtype=torch.float64):
+    def calc_phi(self, properties = False,dtype=torch.float64,key='fuel'):
         print("Calculating phi on CPU")
         stt=time.time()
+        if key == 'mod': self.chi = np.ones_like(self.chi) / self.Evec[:self.L0.shape[0]]
+
         # phi0
-        B4 = self.B2 * self.B2
-        LHS = (9 * B4 + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) @ self.L0)
-                + self.L3 @ self.L2 @ self.L1 @ self.L0)
-        RHS = (self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi
-        if properties:
-            print("phi0 matrix properties")
-            self.print_mat_properties(LHS)
-        self.phi0 = np.linalg.solve(LHS,RHS)
+        if self.B2 == 0: self.phi0 = np.linalg.solve(self.L0,self.chi)
+        else:
+            B4 = self.B2 * self.B2
+            LHS = (9 * B4 + self.B2 * (self.L3 @ self.L2 + (9 * self.L1 + 4 * self.L3) @ self.L0)
+                    + self.L3 @ self.L2 @ self.L1 @ self.L0)
+            RHS = (self.L3 @ self.L2 @ self.L1 + self.B2 * (9 * self.L1 + 4 * self.L3)) @ self.chi
+            if properties:
+                print("phi0 matrix properties")
+                self.print_mat_properties(LHS)
+            self.phi0 = np.linalg.solve(LHS,RHS)
         print(f"phi0 Time: {np.round(time.time()-stt,5)} s")
 
         #phi2
@@ -474,6 +495,17 @@ class Sp3:
                 f.create_dataset("L1", data=self.L1.numpy(),compression="gzip", compression_opts=4)
                 f.create_dataset("L2", data=self.L2.numpy(),compression="gzip", compression_opts=4)
                 f.create_dataset("L3", data=self.L3.numpy(),compression="gzip", compression_opts=4)
+
+    @staticmethod
+    def save_grp_mat_vectors(sig_t_0, sig_t_2, sig_f_0, sig_f_2, chi,save_dir,key):
+        print("Saving Group Vectors")
+        df = pd.DataFrame({ 'sig_t_0': sig_t_0,
+                            'sig_t_2': sig_t_2,
+                            'sig_f_0': sig_f_0,
+                            'sig_f_2': sig_f_2,
+                            'chi': chi,
+                            })
+        df.to_csv(f"{save_dir}grp_vectors_{key}.csv")
 
     @staticmethod
     def save_grp_vectors(sig_t,sig_t_0,sig_t_2,sig_f, sig_f_0, sig_f_2, chi,save_dir):
@@ -649,7 +681,7 @@ class Sp3:
             plt.savefig(f'{self.chart_dir}sigma_s{l}_A{A}.png')
             plt.clf()
 
-    def few_group_fluxes(self):
+    def few_group_fluxes(self, key):
         # collapse the fine group down to few group fluxes
         few_grp_Phi0 = np.zeros((self.few_groups))
         few_grp_Phi2 = np.zeros((self.few_groups))
@@ -874,6 +906,45 @@ class Sp3:
             self.D2 = f["D2"][:]
         print("Diffusion Coefs Read")
 
+    def mat_grp_constants(self,key):
+        if key == 'fuel':
+            Sig_t, Sig_t_0, Sig_t_2 = self.phi_weighted_sigma(self.sig_t_U + self.sig_t_O, "UO2", "total") 
+            Sig_f, Sig_f_0, Sig_f_2 = self.phi_weighted_sigma(self.sigma_f, "UO2", "nu_sigma_f")
+            Chi, _, _ = self.phi_weighted_sigma(self.chi, "UO2", "chi")
+            sigma_s0, sigma_s0_0,sigma_s0_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[0,:,:] + self.sigma_s_gtg_O[0,:,:], "UO2",0)
+            sigma_s1, sigma_s1_0,sigma_s1_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[1,:,:] + self.sigma_s_gtg_O[1,:,:], "UO2",1)
+            sigma_s2, sigma_s2_0,sigma_s2_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[2,:,:] + self.sigma_s_gtg_O[2,:,:], "UO2",2)
+            sigma_s3, sigma_s3_0,sigma_s3_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_U[3,:,:] + self.sigma_s_gtg_O[3,:,:], "UO2",3)
+            D, D0, D2 = self.Dn_coef(self.sigma_s_gtg_U[1,:,:] + self.sigma_s_gtg_O[1,:,:])
+
+        elif key == 'mod':
+            Sig_t, Sig_t_0, Sig_t_2 = self.phi_weighted_sigma(self.sig_t_H + self.sig_t_O, "H2O", "total") 
+            Sig_f, Sig_f_0, Sig_f_2 = self.phi_weighted_sigma(self.sigma_f, "H2O", "nu_sigma_f")
+            Chi, _, _ = self.phi_weighted_sigma(self.chi, "H2O", "chi")
+            sigma_s0, sigma_s0_0,sigma_s0_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[0,:,:] + self.sigma_s_gtg_O[0,:,:], "H2O",0)
+            sigma_s1, sigma_s1_0,sigma_s1_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[1,:,:] + self.sigma_s_gtg_O[1,:,:], "H2O",1)
+            sigma_s2, sigma_s2_0,sigma_s2_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[2,:,:] + self.sigma_s_gtg_O[2,:,:], "H2O",2)
+            sigma_s3, sigma_s3_0,sigma_s3_2 = self.phi_weighted_sigma_sl(self.sigma_s_gtg_H[3,:,:] + self.sigma_s_gtg_O[3,:,:], "H2O",3)
+            D, D0, D2 = self.Dn_coef(self.sigma_s_gtg_U[1,:,:] + self.sigma_s_gtg_O[1,:,:])
+
+        else: raise ValueError("Key needs to be 'fuel' or 'mod'")
+        if self.save_data == True: self.save_grp_mat_vectors(Sig_t_0,Sig_t_2,
+                                                            Sig_f_0, Sig_f_2, 
+                                                            Chi, self.save_dir,key)
+
+        if self.save_data == True: self.save_sigma_sl(sigma_s0, sigma_s0_0, sigma_s0_2,
+                                                        sigma_s1, sigma_s1_0, sigma_s1_2,
+                                                        sigma_s2, sigma_s2_0, sigma_s2_2,
+                                                        sigma_s3, sigma_s3_0, sigma_s3_2,
+                                                        key,self.save_dir,self.NH)
+
+        if self.save_data == True: self.save_Dn(D,D0,D2,self.save_dir,key)
+
+        # save the fluxes
+        Phi0, Phi2 = self.few_group_fluxes('fuel')
+        df = pd.DataFrame({ 'Phi0': Phi0, 'Phi2': Phi2})
+        df.to_csv(f"{self.save_dir}few_grp_fluxes_{key}.csv")
+
     def upd_grp_constants(self,verbose=False):
         print("Few Group Cross-Sections")
         sig_t_U, sig_t_U_0, sig_t_U_2 = self.phi_weighted_sigma(self.sig_t_U,self.AU, "total")
@@ -946,6 +1017,7 @@ class Sp3:
                                                         sigma_s3_H, sigma_s3_0_H, sigma_s3_2_H,
                                                         self.AH,self.save_dir,self.NH)
 
+        """
         # Oxygen
         print("Oxygen Group->Group Few Group Cross-Sections")
         sigma_s0_O, sigma_s0_0_O, sigma_s0_2_O = self.phi_weighted_sigma_sl(self.sigma_s_gtg_O[0,:,:], self.AO,0)
@@ -969,100 +1041,216 @@ class Sp3:
                                                         sigma_s2_O, sigma_s2_0_O, sigma_s2_2_O,
                                                         sigma_s3_O, sigma_s3_0_O, sigma_s3_2_O,
                                                         self.AO,self.save_dir,self.NH)
+        """
         self.Sig_s0 = sigma_s0_U + sigma_s0_H
+        self.Sig_s2 = sigma_s2_U + sigma_s2_H
         self.Sig_s0_0 = sigma_s0_0_U + sigma_s0_0_H
         self.Sig_s0_2 = sigma_s0_2_U + sigma_s0_2_H
         self.Sig_s2_0 = sigma_s2_0_U + sigma_s2_0_H
         self.Sig_s2_2 = sigma_s2_2_U + sigma_s2_2_H
+
 
         # calulate diffusion coefs
         self.D, self.D0, self.D2 = self.Dn_coef(self.sigma_s_gtg_U[1,:,:] + self.sigma_s_gtg_H[1,:,:])
         pdf = self.get_percent_diff(self.D,self.D0,0)
         if verbose: print(f"{pdf:5g}, Diffusion Coef 0")
 
-        if self.save_data == True: self.save_Dn(self.D,self.D0,self.D2,self.save_dir)
+        if self.save_data == True: self.save_Dn(self.D,self.D0,self.D2,self.save_dir,key=None)
 
+    @staticmethod
+    def solve_sp3_eqns_new(
+        B2: float,
+        D0: np.ndarray, D2: np.ndarray,
+        Sig_t_0: np.ndarray, Sig_t_2: np.ndarray,
+        Sig_s0_0: np.ndarray, Sig_s0_2: np.ndarray, Sig_s2_2: np.ndarray,
+        chi: np.ndarray,
+        nuSigf0: np.ndarray, nuSigf2: np.ndarray,
+        normalize: str = "sum_phi0",  # "sum_phi0" or "sum_scalar"
+        norm_value: float = 1.0,
+    ):
+        """
+        Infinite-medium buckling solve for Eq. (59a/59b):
+          -D0 ∇² Φ0 + (Σt0-Σs0_0) Φ0 = χ(νΣf0·Φ0 - 2 νΣf2·Φ2) + 2(Σt2-Σs0_2) Φ2
+          -D2 ∇² Φ2 + (Σt2-Σs2_2) Φ2 = 2(Σt0 Φ0 - 2Σt2 Φ2) - 2(Σs0_0 Φ0 - 2Σs0_2 Φ2) - 2χ(νΣf0·Φ0 - 2 νΣf2·Φ2)
+    
+        Buckling: -∇² -> B², so -D∇² -> +B² D.
+        Homogeneous system needs a normalization constraint.
+        """
+        G = chi.size
+        chi = chi.astype(np.float64)
+        chi = chi / (chi.sum())
+    
+        # Make diagonal total matrices
+        T0 = np.diag(Sig_t_0)
+        T2 = np.diag(Sig_t_2)
+    
+        # Convenience
+        R00 = (T0 - Sig_s0_0)              # (Σt0 - Σs0_0)
+        C02 = 2.0 * (T2 - Sig_s0_2)        # 2(Σt2 - Σs0_2)
+    
+        # Fission "outer-product" operator pieces:
+        # χ * (nuSigf0·Φ0 - 2 nuSigf2·Φ2) = (χ nuSigf0)Φ0 + (χ * (-2 nuSigf2))Φ2
+        F00 = np.outer(chi, nuSigf0)             # GxG
+        F02 = np.outer(chi, -2.0 * nuSigf2)      # GxG
+    
+        # Build 2Gx2G matrix M59 such that M59 @ [Φ0; Φ2] = 0
+        # Eq (59a): (B² D0 + R00)Φ0  + ( -C02 )Φ2  + ( -F00 Φ0 - F02 Φ2 ) = 0
+        A00 = (B2 * D0) + R00 - F00
+        A02 = (-C02)    - F02
+    
+        # Eq (59b): (B² D2 + (T2 - S2_2) + 4T2 -4S0_2)Φ2 + (-2T0 +2S0_0)Φ0 + 2χ(...) = 0
+        # The "+2χ(...)" contributes +2*F00 Φ0 +2*F02 Φ2
+        B20 = (-2.0 * T0) + (2.0 * Sig_s0_0) + (2.0 * F00)
+        B22 = (B2 * D2) + (T2 - Sig_s2_2) + (4.0 * T2) - (4.0 * Sig_s0_2) + (2.0 * F02)
+    
+        M = np.block([[A00, A02],
+                      [B20, B22]]).astype(np.float64)
+    
+        # Add normalization constraint by replacing one row
+        b = np.zeros(2*G, dtype=np.float64)
+    
+        if normalize == "sum_phi0":
+            # enforce sum_g Φ0_g = norm_value
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            b[0] = norm_value
+        elif normalize == "sum_scalar":
+            # enforce sum_g (ϕ_g) = sum_g(Φ0_g - 2Φ2_g) = norm_value
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            M[0, G:2*G] = -2.0
+            b[0] = norm_value
+        else:
+            raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
+    
+        x = np.linalg.solve(M, b)
+        Phi0 = x[:G]
+        Phi2 = x[G:]
+        return Phi0, Phi2
+
+    @staticmethod
+    def solve_sp3_eqns_conventional(
+        B2: float,
+        D: np.ndarray,
+        Sig_t: np.ndarray,
+        Sig_s0: np.ndarray,
+        Sig_s2: np.ndarray,
+        chi: np.ndarray,
+        nuSigf: np.ndarray,
+        normalize: str = "sum_phi0",
+        norm_value: float = 1.0,
+    ):
+        """
+        Infinite-medium buckling solve for conventional Eq. (61a/61b):
+    
+          -D ∇² Φ0 + (Σt-Σs0)Φ0 = χ νΣf (Φ0-2Φ2) + 2(Σt-Σs0)Φ2
+          -D ∇² Φ2 + (Σt-Σs2)Φ2 = 2(Σt-Σs0)(Φ0-2Φ2) - 2 χ νΣf (Φ0-2Φ2)
+    
+        We implement χ νΣf (Φ0-2Φ2) as outer(χ,nuSigf) @ (Φ0-2Φ2).
+        """
+        G = chi.size
+        chi = chi.astype(np.float64)
+        chi = chi / (chi.sum() + 1e-300)
+    
+        T = np.diag(Sig_t)
+        R0 = (T - Sig_s0)
+        R2 = (T - Sig_s2)
+    
+        F = np.outer(chi, nuSigf)   # χ * (nuSigf·something)
+    
+        # Let s = (Φ0 - 2Φ2). Then fission term is F @ s.
+        # Eq61a: (B²D + R0)Φ0  - 2R0 Φ2  - F(Φ0 - 2Φ2) = 0
+        A00 = (B2 * D) + R0 - F
+        A02 = (-2.0 * R0) + (2.0 * F)
+    
+        # Eq61b: (B²D + R2)Φ2  - 2R0(Φ0 - 2Φ2) + 2F(Φ0 - 2Φ2) = 0
+        # Expand: (-2R0 + 2F)Φ0 + (B²D + R2 + 4R0 - 4F)Φ2 = 0
+        B20 = (-2.0 * R0) + (2.0 * F)
+        B22 = (B2 * D) + R2 + (4.0 * R0) - (4.0 * F)
+    
+        M = np.block([[A00, A02],
+                      [B20, B22]]).astype(np.float64)
+    
+        b = np.zeros(2*G, dtype=np.float64)
+        if normalize == "sum_phi0":
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            b[0] = norm_value
+        elif normalize == "sum_scalar":
+            M[0, :] = 0.0
+            M[0, 0:G] = 1.0
+            M[0, G:2*G] = -2.0
+            b[0] = norm_value
+        else:
+            raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
+    
+        x = np.linalg.solve(M, b)
+        return x[:G], x[G:]
+    
     def finite_difference(self,tol=1e-5,omega=0.25):
         print("Begin Finite Difference Sweep")
         def sp3_block_thomas(
-            D0, D2, A00, A02, A20, A22, dx,
-            N,              # num cells
-            shift=0.0,      # tiny τ to add to all diagonal blocks (handles nullspace)
-            pin=None, pin_value=1.0  # optionally pin (i_pin, comp) to value
+            D0, D2, A00, A02, A20, A22, dx, N,
+            Q0=None, Q2=None, shift=0.0, pin=None, pin_value=1.0
         ):
-            """
-            Solve the 1D homogenized SP3 block-tridiagonal system in one pass.
-            Unknown at each cell i is X_i = [Phi0_i (G), Phi2_i (G)] with size 2G.
+            G = D0.shape[0]; m = 2*G; dx2 = dx*dx
         
-            Discretization (central diff) gives:
-              -D/dx^2*(X_{i+1} - 2 X_i + X_{i-1}) + A X_i = 0
-            where A = [[A00, A02],[A20, A22]], D = diag(D0, D2).
+            # Blocks common to all rows
+            D0_off = (1.0/dx2) * D0
+            D2_off = (1.0/dx2) * D2
+            OFF = -np.block([[D0_off, np.zeros((G,G))],
+                             [np.zeros((G,G)), D2_off]])            # −D_off
+            CENTER = np.block([[ (2.0/dx2)*D0,            np.zeros((G,G))],
+                               [ np.zeros((G,G)),          (2.0/dx2)*D2]]) \
+                     + np.block([[A00, A02],
+                                 [A20, A22]])                        # 2*D_off + A
         
-            Reflecting BC (Neumann): X_{-1} = X_{1}, X_{N} = X_{N-2}
-              => add + (D/dx^2) to the first and last diagonal blocks.
-            """
-            G = D0.shape[0]
-            m = 2*G
-            dx2 = dx*dx
-        
-            # Blocks
-            D0_off = (1.0/dx2)*D0
-            D2_off = (1.0/dx2)*D2
-            B = -np.block([[D0_off, np.zeros((G,G))],
-                           [np.zeros((G,G)), D2_off]])  # lower
-            C = B.copy()                                 # upper (same for 1D Laplacian)
-            D0_diag = (2.0/dx2)*D0
-            D2_diag = (2.0/dx2)*D2
-            A_center = np.block([[A00, A02],
-                                 [A20, A22]])
-            A_diag = np.block([[D0_diag, np.zeros((G,G))],
-                               [np.zeros((G,G)), D2_diag]]) + A_center
-        
-            # Allocate arrays for Thomas sweeps
-            # Diagonal blocks (modified), upper blocks (constant), and RHS (zero unless pin)
+            # Allocate variable tri-diagonal arrays
             Atil = np.empty((N, m, m))
+            B    = np.empty((N, m, m))   # lower
+            C    = np.empty((N, m, m))   # upper
             rhs  = np.zeros((N, m))
         
-            # Fill all diagonals with center block + optional shift
+            # Fill interior rows
             for i in range(N):
-                Atil[i,:,:] = A_diag
+                Atil[i] = CENTER
+                B[i]    = OFF
+                C[i]    = OFF
                 if shift > 0.0:
                     Atil[i, np.arange(m), np.arange(m)] += shift
         
-            # Neumann: fold ghosts into edges (adds +D_off to diagonal at edges)
-            A_edge_add = np.block([[D0_off, np.zeros((G,G))],
-                                   [np.zeros((G,G)), D2_off]])
-            Atil[0,:,:]     += A_edge_add
-            Atil[N-1,:,:]   += A_edge_add
+            # Correct Neumann BCs: double the edge neighbor coupling, not the diagonal
+            B[0][:]      = 0.0                # no lower neighbor for i=0
+            C[0][:]      = 2.0 * OFF          # couple twice to i=1
         
-            # Optional pin: fix one DOF (cell, component) to value
+            C[N-1][:]    = 0.0                # no upper neighbor for i=N-1
+            B[N-1][:]    = 2.0 * OFF          # couple twice to i=N-2
+        
+            # Sources
+            if Q0 is not None: rhs[:, :G] = Q0
+            if Q2 is not None: rhs[:, G:] = Q2
+        
+            # Optional pin (inhomogeneous row)
             if pin is not None:
                 i_pin, comp = pin
                 Atil[i_pin,:,:] = 0.0
                 Atil[i_pin, comp, comp] = 1.0
-                rhs[i_pin, :] = 0.0
+                rhs[i_pin,:] = 0.0
                 rhs[i_pin, comp] = pin_value
         
             # Forward elimination
-            U = C  # constant upper block
             for i in range(1, N):
-                # Solve Atil[i-1] * T = B  => T = Atil[i-1]^{-1} B
-                T = np.linalg.solve(Atil[i-1], B)
-                # Schur compliment for current diagonal
-                Atil[i] = Atil[i] - U @ T
-                # Update rhs
-                rhs[i]  = rhs[i] - U @ np.linalg.solve(Atil[i-1], rhs[i-1])
+                T = np.linalg.solve(Atil[i-1], B[i])        # A_{i-1}^{-1} B_i
+                Atil[i] = Atil[i] - C[i-1] @ T
+                rhs[i]  = rhs[i]  - C[i-1] @ np.linalg.solve(Atil[i-1], rhs[i-1])
         
             # Back substitution
             X = np.zeros((N, m))
-            X[N-1] = np.linalg.solve(Atil[N-1], rhs[N-1])
+            X[-1] = np.linalg.solve(Atil[-1], rhs[-1])
             for i in range(N-2, -1, -1):
-                X[i] = np.linalg.solve(Atil[i], rhs[i] - U @ X[i+1])
+                X[i] = np.linalg.solve(Atil[i], rhs[i] - C[i] @ X[i+1])
         
-            Phi0 = X[:, :G]
-            Phi2 = X[:, G:]
-            return Phi0, Phi2
-
+            return X[:, :G], X[:, G:]
         
         G, N = self.few_groups, self.num_cells
         Phi0 = np.ones((N, G)); Phi2 = np.ones((N, G))
@@ -1074,7 +1262,7 @@ class Sp3:
         S00 = self.Sig_s0_0
         S02 = self.Sig_s0_2
         S22 = self.Sig_s2_2
-        chi = self.Chi
+        chi = self.Chi / np.sum(self.Chi)
         F0 = np.outer(chi, self.Sig_f_0)   # χ νΣf^0
         F2 = np.outer(chi, self.Sig_f_2)   # χ νΣf^2
         
@@ -1084,10 +1272,81 @@ class Sp3:
         A20 = -2*Sig_t_0 + 2*S00 + 2*F0
         A22 = (Sig_t_2 - S22) + 4*Sig_t_2 - 4*S02 - 4*F2
         stt_transport = time.time()
+        # initial guess (positive)
+        Phi0 = np.ones((N,G))
+        Phi2 = np.zeros((N,G))
+        k = 1.0
+    
+        # diag fission operators (if F0,F2 are vectors)
+        F0m = np.diag(F0) if F0.ndim == 1 else F0
+        F2m = np.diag(F2) if F2.ndim == 1 else F2
+    
+        # helper: compute fission production at each cell (G-vector)
+        def fiss_src(P0_i, P2_i):
+            return chi * (F0m @ P0_i - 2.0*(F2m @ P2_i))  # (G,)
+    
+        # Outer power iteration
+        max_outer = 200
+        tol_k=1e-8
+        tol_phi=1e-8
+        for it in range(max_outer):
+            Phi0_old = Phi0.copy()
+            Phi2_old = Phi2.copy()
+            k_old = k
+    
+            # build Q0,Q2 from old fluxes
+            Q0 = np.zeros((N,G))
+            Q2 = np.zeros((N,G))
+            for i in range(N):
+                q = fiss_src(Phi0_old[i], Phi2_old[i])
+                Q0[i] = q / k
+                Q2[i] = (-2.0*q) / k
+    
+            # solve fixed-source system with Thomas (your corrected Neumann BC version)
+            Phi0, Phi2 = sp3_block_thomas(
+                D0=self.D0, D2=self.D2,
+                A00=A00, A02=A02, A20=A20, A22=A22,
+                dx=self.dx, N=N,
+                Q0=Q0, Q2=Q2,
+                pin=None, shift=0.0
+            )
+    
+            # update k by Rayleigh quotient (ratio of new to old production)
+            # (any consistent inner product works; this is a common choice)
+            P_new = 0.0
+            P_old = 0.0
+            for i in range(N):
+                P_new += np.sum(fiss_src(Phi0[i],   Phi2[i]))
+                P_old += np.sum(fiss_src(Phi0_old[i], Phi2_old[i]))
+            k = k_old * (P_new / (P_old + 1e-300))
+    
+            # normalize flux to prevent overflow/underflow
+            norm = np.max(Phi0)
+            if norm > 0:
+                Phi0 /= norm
+                Phi2 /= norm
+    
+            # convergence checks
+            dk = abs(k - k_old) / (abs(k_old) + 1e-300)
+            dphi = np.max(np.abs(Phi0 - Phi0_old))
+            print(f"it={it+1}  k={k:.10f}  rel_dk={dk:.3e}  dphi_inf={dphi:.3e}")
+    
+            if dk < tol_k and dphi < tol_phi:
+                break
+    
+        print(k)
+
+        """
+        Q0 = np.ones((N, G), dtype=np.float64)   # uniform source in all groups
+        Q2 = np.zeros((N, G), dtype=np.float64)
         Phi0, Phi2 = sp3_block_thomas(self.D0, self.D2, A00, A02, A20, A22,
-                              self.dx, self.num_cells,
-                              pin=(self.num_cells//2, 0), pin_value=1.0, shift=0.0)
+                              self.dx, self.num_cells, Q0=Q0, Q2=Q2,
+                              pin=None, shift=0.0)
         
+        print(Phi0.shape)
+        print(Phi2.shape)
+        """
+        #print(Phi0,Phi2)
         # Diffusion blocks
         #D0 = self.D0
         #D2 = self.D2
@@ -1226,6 +1485,7 @@ class Sp3:
             it += 1
         """
         
+        #return k, Phi0, Phi2
         print(f"Convergence Time: {np.round(time.time() - stt_transport, 5)} seconds")
         nodes = np.linspace(0,self.L,self.num_cells)
         phi0 = Phi0 - 2*Phi2
@@ -1256,8 +1516,8 @@ class Sp3:
             self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U,verbose)
             print(f'Build Sigma_gtg and Ln for Hydrogen, NH = {self.NH}')
             self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H,verbose)
-            print(f'Build Sigma_gtg and Ln for Oxygen, NO = {self.NO}')
-            self.calc_Ln(self.AO, self.sig_t_O, self.sig_s0_O,verbose)
+            #print(f'Build Sigma_gtg and Ln for Oxygen, NO = {self.NO}')
+            #self.calc_Ln(self.AO, self.sig_t_O, self.sig_s0_O,verbose)
             if verbose: self.save_Ln()
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1271,11 +1531,48 @@ class Sp3:
                 self.plot_flux_diff_single_axis()
                 self.plot_flux_diff()
             if self.save_data == True: self.save_fluxes()
+            #self.mat_grp_constants("fuel")
             self.upd_grp_constants()
 
         # few group fluxes
-        Phi0_fg, Phi2_fg = self.few_group_fluxes()
-        if transport: self.finite_difference()
+        Phi0_fg, Phi2_fg = self.few_group_fluxes(key=None)
+        #if transport: self.finite_difference()
+        Phi0_sp3_new, Phi2_sp3_new = self.solve_sp3_eqns_new(
+            self.B2,
+            self.D0, self.D2,
+            self.Sig_t_0, self.Sig_t_2,
+            self.Sig_s0_0, self.Sig_s0_2, self.Sig_s2_2,
+            self.Chi,
+            self.Sig_f_0, self.Sig_f_2)
+
+        Phi0_sp3_conv, Phi2_sp3_conv = self.solve_sp3_eqns_conventional(
+            self.B2,
+            self.D,
+            self.Sig_t,
+            self.Sig_s0,
+            self.Sig_s2,
+            self.Chi,
+            self.Sig_f,                
+        )
+
+        # plot and compare
+        Efg = np.exp(np.linspace(np.log(self.Emin),np.log(self.E0),self.few_groups+1))
+        Efg = np.flip(Efg)
+        plt.figure(figsize=(8,6))
+
+        plt.step(Efg[:-1], Phi0_sp3_new, where='post', label=r'$\Phi_0^{new}$')
+        plt.step(Efg[:-1], Phi0_sp3_conv, where='post', label=r'$\Phi_0^{conv}$')
+
+        plt.xlabel('Energy (MeV)')
+        plt.ylabel(r'$\Phi_0$')
+        plt.legend()
+        plt.grid(True, which='both')
+
+        plt.xscale('log')
+        plt.savefig("sp3_fg_Phi0_comp.png")
+
+
+#        print(Phi0_sp3_new,Phi0_sp3_conv)
 
     @staticmethod
     def alpha_fn(A): return ((A - 1.0)/(A + 1.0)) ** 2
@@ -1393,7 +1690,7 @@ class Sp3:
                         sigma_s3, sigma_s3_0, sigma_s3_2,
                         A,save_dir,NH):
         # save
-        with h5py.File(f"{save_dir}Sigma_sl_A{A}_{NH}.h5", "w") as f:
+        with h5py.File(f"{save_dir}Sigma_sl_A{A}.h5", "w") as f:
             f.create_dataset("Sigma S0", data=sigma_s0.T,compression="gzip", compression_opts=4)
             f.create_dataset("Sigma S0 phi0", data=sigma_s0_0.T,compression="gzip", compression_opts=4)
             f.create_dataset("Sigma S0 phi2", data=sigma_s0_2.T,compression="gzip", compression_opts=4)
@@ -1408,9 +1705,9 @@ class Sp3:
             f.create_dataset("Sigma S3 phi2", data=sigma_s3_2.T,compression="gzip", compression_opts=4)
 
     @staticmethod
-    def save_Dn(D,D0,D2,save_dir):
+    def save_Dn(D,D0,D2,save_dir,key):
         # save
-        with h5py.File(f"{save_dir}Dn_coefs.h5", "w") as f:
+        with h5py.File(f"{save_dir}Dn_coefs_{key}.h5", "w") as f:
             f.create_dataset("D",  data=D,compression="gzip", compression_opts=4)
             f.create_dataset("D0", data=D0,compression="gzip", compression_opts=4)
             f.create_dataset("D2", data=D2,compression="gzip", compression_opts=4)
@@ -1473,11 +1770,11 @@ stt = time.time()
 NH = 1
 xs_tol = 5 # percent
 B2 = .0
-nbins = 5000
+nbins = 15000
 #B2 = np.linspace(-.025,.025,6)
 few_groups = 8
 fromH5 = False
-dx = .001
+dx = .0005
 verbose = False
 adaptive = False
 
