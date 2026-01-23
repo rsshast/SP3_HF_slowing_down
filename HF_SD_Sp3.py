@@ -6,6 +6,7 @@ import os
 import time
 import math
 import h5py
+from scipy.integrate import simpson
 from numba import njit, prange
 import psutil
 import torch # tensor decomps, gpu
@@ -20,17 +21,17 @@ class Sp3:
         # ranges
         self.B2 = B2
         self.E0 = 1e7
-        self.Emin = 1
-        #self.Emin = 1e-2
+        #self.Emin = 1
+        self.Emin = 1e-2
         self.leg_order = 4
 
         # number densities
         self.AH = 1
-        self.NH = 2 / 3
+        self.NH = .5
         #self.NH = 1 / 9
         self.AU = 238
         #self.NU = 1
-        self.NU = 1/3
+        self.NU = .1
         #self.NU = 10.97 / 270
         self.AO = 16
         #self.NO = 1
@@ -683,8 +684,8 @@ class Sp3:
 
         for i in range(few_grp_Phi0.size):
             stt, stp = fg_idx[i], fg_idx[i+1]
-            few_grp_Phi0[i] = np.trapz(self.Phi0[stt:stp], self.boundaries[stt:stp])
-            few_grp_Phi2[i] = np.trapz(self.Phi2[stt:stp], self.boundaries[stt:stp]) 
+            few_grp_Phi0[i] = simpson(self.Phi0[stt:stp], self.boundaries[stt:stp])
+            few_grp_Phi2[i] = simpson(self.Phi2[stt:stp], self.boundaries[stt:stp]) 
 
         # plotting
         index = 1
@@ -710,13 +711,17 @@ class Sp3:
     def phi_weighted_sigma(self, sigma, A, key):
         # start generating few group xs's
         def sigma_vec_few_grp(sigma, phi, group_idx, E):
+            # E is actually the lethargy boundaries
             few_grp_xs = np.zeros((group_idx.size - 1))
             # ensure sigma and phi are the same size
             assert sigma.size == phi.size
     
             for i in range(few_grp_xs.size):
                 stt, stp = group_idx[i], group_idx[i+1]
-                few_grp_xs[i] = np.trapz(sigma[stt:stp] * phi[stt:stp], E[stt:stp]) / np.trapz(phi[stt:stp], E[stt:stp])
+                num = simpson(sigma[stt:stp] * phi[stt:stp], E[stt:stp])
+                den = simpson(phi[stt:stp], E[stt:stp])
+                few_grp_xs[i] = num/den
+                #few_grp_xs[i] = np.trapz(sigma[stt:stp] * phi[stt:stp], E[stt:stp]) / np.trapz(phi[stt:stp], E[stt:stp])
     
             return few_grp_xs
 
@@ -731,9 +736,9 @@ class Sp3:
 
         phi = self.phi0
         if sigma.size > phi.size: sigma = sigma[:-1]
-        sigma_fg = sigma_vec_few_grp(sigma, phi, fg_idx, self.Evec[:-1])
-        sigma_fg_0 = sigma_vec_few_grp(sigma, self.Phi0, fg_idx, self.Evec[:-1])
-        sigma_fg_2 = sigma_vec_few_grp(sigma, self.Phi2, fg_idx, self.Evec[:-1])
+        sigma_fg = sigma_vec_few_grp(sigma, phi, fg_idx, self.boundaries[:-1])
+        sigma_fg_0 = sigma_vec_few_grp(sigma, self.Phi0, fg_idx, self.boundaries[:-1])
+        sigma_fg_2 = sigma_vec_few_grp(sigma, self.Phi2, fg_idx, self.boundaries[:-1])
 #        print(f"Update A={A} {key} xs: {np.round(time.time()-stt,5)} s")
 #        print(f"L2 norm on phi0 and Phi0 weighted xs's for A={A}, {key}: {self.L2_norm(self.normalize(sigma_fg),self.normalize(sigma_fg_0))}")
 
@@ -767,12 +772,12 @@ class Sp3:
             stt_i, stp_i = fg_idx[i], fg_idx[i+1]
             for j in range(self.few_groups):
                 stt_j, stp_j = fg_idx[j], fg_idx[j+1]
-                M_fg[i,j] = np.sum(np.trapz(M[stt_i:stp_i,stt_j:stp_j] * phi[stt_i:stp_i], E[stt_i:stp_i]) 
-                        / np.trapz(phi[stt_i:stp_i],E[stt_i:stp_i]))
-                M_fg_0[i,j] = np.sum(np.trapz(M[stt_i:stp_i,stt_j:stp_j] * self.Phi0[stt_i:stp_i], E[stt_i:stp_i]) 
-                        / np.trapz(self.Phi0[stt_i:stp_i],E[stt_i:stp_i]))
-                M_fg_2[i,j] = np.sum(np.trapz(M[stt_i:stp_i,stt_j:stp_j] * self.Phi2[stt_i:stp_i], E[stt_i:stp_i]) 
-                        / np.trapz(self.Phi2[stt_i:stp_i],E[stt_i:stp_i]))
+                M_fg[i,j] = np.sum(simpson(M[stt_i:stp_i,stt_j:stp_j] * phi[stt_i:stp_i], E[stt_i:stp_i]) 
+                        / simpson(phi[stt_i:stp_i],E[stt_i:stp_i]))
+                M_fg_0[i,j] = np.sum(simpson(M[stt_i:stp_i,stt_j:stp_j] * self.Phi0[stt_i:stp_i], E[stt_i:stp_i]) 
+                        / simpson(self.Phi0[stt_i:stp_i],E[stt_i:stp_i]))
+                M_fg_2[i,j] = np.sum(simpson(M[stt_i:stp_i,stt_j:stp_j] * self.Phi2[stt_i:stp_i], E[stt_i:stp_i]) 
+                        / simpson(self.Phi2[stt_i:stp_i],E[stt_i:stp_i]))
 
         M_fg_norm = M_fg / np.linalg.norm(M_fg)
         M_fg_0_norm = M_fg_0 / np.linalg.norm(M_fg_0)
@@ -805,12 +810,12 @@ class Sp3:
             for j in range(self.few_groups):
                 c0, c1 = fg_idx[j], fg_idx[j + 1]
                 # Integrate across incident-energy slice for every row, then average over the row block
-                D[i, j] = (np.sum(np.trapz(D_tr[r0:r1, c0:c1] * phi_tr[c0:c1], E[c0:c1], axis=1)) 
-                            / np.trapz(phi_tr[c0:c1], E[c0:c1]))
-                D0[i, j] = (np.sum(np.trapz(L1_inv[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1)) 
-                            / np.trapz(self.Phi0[c0:c1], E[c0:c1])).T
-                D2[i, j] = (np.sum(np.trapz(L3_inv[r0:r1, c0:c1] * self.Phi2[c0:c1], E[c0:c1], axis=1)) 
-                            / np.trapz(self.Phi2[c0:c1], E[c0:c1])).T
+                D[i, j] = (np.sum(simpson(D_tr[r0:r1, c0:c1] * phi_tr[c0:c1], E[c0:c1], axis=1)) 
+                            / simpson(phi_tr[c0:c1], E[c0:c1]))
+                D0[i, j] = (np.sum(simpson(L1_inv[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1)) 
+                            / simpson(self.Phi0[c0:c1], E[c0:c1])).T
+                D2[i, j] = (np.sum(simpson(L3_inv[r0:r1, c0:c1] * self.Phi2[c0:c1], E[c0:c1], axis=1)) 
+                            / simpson(self.Phi2[c0:c1], E[c0:c1])).T
                 
         print(f"D_coef Time: {np.round(time.time()-stt,5)} s")
         if self.save_data == True:
@@ -1079,7 +1084,7 @@ class Sp3:
             self.upd_grp_constants()
 
         # few group fluxes
-        phi0_fg, phi2_fg = self.few_group_fluxes(key=None)
+        #phi0_fg, phi2_fg = self.few_group_fluxes(key=None)
         print("Comparing FG Constants")
         phi0_sp3_new, phi2_sp3_new = self.solve_sp3_eqns_new(
             self.B2,
@@ -1099,36 +1104,46 @@ class Sp3:
             self.Sig_f,                
         )
 
-        # plot and compare
-        Efg = np.exp(np.linspace(np.log(self.Emin),np.log(self.E0),self.few_groups+1))
-        Efg = np.flip(Efg)
-
-        plt.figure(figsize=(8,6))
-        plt.step(Efg[:-1], phi0_sp3_new, where='post', label=r'$\phi_0^{new}$')
-        plt.step(Efg[:-1], phi0_sp3_conv, where='post', label=r'$\phi_0^{conv}$')
-        plt.title(f"Scalar Flux, B2 = {self.B2}")
-        plt.xlabel('Energy (MeV)')
-        plt.ylabel(r'$\phi_0$')
-        plt.legend()
-        plt.grid(True, which='both')
-        plt.xscale('log')
-        plt.savefig(f"{self.chart_dir}sp3_fg_phi0_comp.png")
-        plt.clf()
-
-        plt.figure(figsize=(8,6))
-        plt.title(f"Scalar Flux 2nd Moment, B2 = {self.B2}")
-        plt.step(Efg[:-1], phi2_sp3_new, where='post', label=r'$\phi_2^{new}$')
-        plt.step(Efg[:-1], phi2_sp3_conv, where='post', label=r'$\phi_2^{conv}$')
-        plt.xlabel('Energy (MeV)')
-        plt.ylabel(r'$\phi_2$')
-        plt.legend()
-        plt.grid(True, which='both')
-        plt.xscale('log')
-        plt.savefig(f"{self.chart_dir}sp3_fg_phi2_comp.png")
-        plt.clf()
-
+        verbose = True
+        if verbose:
+            # plot and compare
+            Efg = np.exp(np.linspace(np.log(self.Emin),np.log(self.E0),self.few_groups+1))
+            Efg = np.flip(Efg)
+    
+            plt.figure(figsize=(8,6))
+            plt.step(Efg[:-1], phi0_sp3_new, where='post', label=r'$\phi_0^{new}$')
+            plt.step(Efg[:-1], phi0_sp3_conv, where='post', label=r'$\phi_0^{conv}$')
+            plt.title(f"Scalar Flux, B2 = {self.B2}")
+            plt.xlabel('Energy (MeV)')
+            plt.ylabel(r'$\phi_0$')
+            plt.legend()
+            plt.grid(True, which='both')
+            plt.xscale('log')
+            plt.savefig(f"{self.chart_dir}sp3_fg_phi0_comp_{self.B2}.png")
+            plt.clf()
+    
+            plt.figure(figsize=(8,6))
+            plt.title(f"Scalar Flux 2nd Moment, B2 = {self.B2}")
+            plt.step(Efg[:-1], phi2_sp3_new, where='post', label=r'$\phi_2^{new}$')
+            plt.step(Efg[:-1], phi2_sp3_conv, where='post', label=r'$\phi_2^{conv}$')
+            plt.xlabel('Energy (MeV)')
+            plt.ylabel(r'$\phi_2$')
+            plt.legend()
+            plt.grid(True, which='both')
+            plt.xscale('log')
+            plt.savefig(f"{self.chart_dir}sp3_fg_phi2_comp_{self.B2}.png")
+            plt.clf()
+    
         print(f"L2 Norm on Conventional and New SP3 Equations, phi0: {self.L2_norm(phi0_sp3_new, phi0_sp3_conv)}")
         print(f"L2 Norm on Conventional and New SP3 Equations, phi2: {self.L2_norm(phi2_sp3_new, phi2_sp3_conv)}")
+
+        print(f"phis, new followed by conv. B2={self.B2}")
+        print("phi0")
+        print(phi0_sp3_new)
+        print(phi0_sp3_conv)
+        print("phi2")
+        print(phi2_sp3_new)
+        print(phi2_sp3_conv)
 
     @staticmethod
     def alpha_fn(A): return ((A - 1.0)/(A + 1.0)) ** 2
@@ -1322,33 +1337,26 @@ class Sp3:
 
     @staticmethod
     def solve_sp3_eqns_new(
-        B2: float,
-        D0: np.ndarray, D2: np.ndarray,
-        Sig_t_0: np.ndarray, Sig_t_2: np.ndarray,
-        Sig_s0_0: np.ndarray, Sig_s0_2: np.ndarray, Sig_s2_2: np.ndarray,
-        chi: np.ndarray,
-        nuSigf0: np.ndarray, nuSigf2: np.ndarray,
-        normalize: str = "sum_phi0",  # "sum_phi0" or "sum_scalar"
-        norm_value: float = 1.0,
-    ): 
-        """Infinite-medium buckling solve for Eq. (59a/59b):"""
+        B2, D0, D2, Sig_t_0, Sig_t_2, Sig_s0_0, Sig_s0_2, Sig_s2_2, chi, nuSigf0, nuSigf2,
+        normalize: str = "sum_scalar",  # "sum_phi0" or "sum_scalar"
+        norm_value: float = 1.0): 
+        """Infinite-medium buckling solve for New Sp3 Eqns:"""
         G = chi.size
-        chi = chi.astype(np.float64)
         chi = chi / (chi.sum())
     
         # Make diagonal total matrices
         T0 = np.diag(Sig_t_0)
         T2 = np.diag(Sig_t_2)
         R00 = (T0 - Sig_s0_0)       
-        C02 = 2.0 * (T2 - Sig_s0_2)     
+        C02 = 2 * (T2 - Sig_s0_2)     
     
         F00 = np.outer(chi, nuSigf0)            
-        F02 = np.outer(chi, -2.0 * nuSigf2)     
+        F02 = np.outer(chi, -2 * nuSigf2)     
     
         A00 = (B2 * D0) + R00 - F00
         A02 = (-C02)    - F02
-        B20 = (-2.0 * T0) + (2.0 * Sig_s0_0) + (2.0 * F00)
-        B22 = (B2 * D2) + (T2 - Sig_s2_2) + (4.0 * T2) - (4.0 * Sig_s0_2) + (2.0 * F02)
+        B20 = (-2 * T0) + (2 * Sig_s0_0) + (2 * F00)
+        B22 = (B2 * D2) + (T2 - Sig_s2_2) + (4 * T2) - (4 * Sig_s0_2) + (2 * F02)
     
         M = np.block([[A00, A02],
                       [B20, B22]]).astype(np.float64)
@@ -1365,13 +1373,13 @@ class Sp3:
             M[0, 0:G] = 1.0
             M[0, G:2*G] = -2.0
             b[0] = norm_value
-        else:
-            raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
+        else: raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
     
         x = np.linalg.solve(M, b)
+
         Phi0 = x[:G]
         Phi2 = x[G:]
-        return Phi0, Phi2
+        return Phi0 - 2*Phi2, Phi2
 
     @staticmethod
     def solve_sp3_eqns_conventional(
@@ -1385,25 +1393,24 @@ class Sp3:
         normalize: str = "sum_phi0",
         norm_value: float = 1.0,
     ): 
-        """Infinite-medium buckling solve for conventional Eq. (61a/61b):"""
+        """Infinite-medium buckling solve for conventiona Sp3 Eqns:"""
         G = chi.size
-        chi = chi.astype(np.float64)
-        chi = chi / (chi.sum() + 1e-300)
+        chi = chi / (chi.sum())
     
         T = np.diag(Sig_t)
         R0 = (T - Sig_s0)
         R2 = (T - Sig_s2)
-    
         F = np.outer(chi, nuSigf)
     
         A00 = (B2 * D) + R0 - F
-        A02 = (-2.0 * R0) + (2.0 * F)
-        B20 = (-2.0 * R0) + (2.0 * F)
-        B22 = (B2 * D) + R2 + (4.0 * R0) - (4.0 * F)
+        A02 = (-2 * R0) + (2 * F)
+        B20 = (-2 * R0) + (2 * F)
+        B22 = (B2 * D) + R2 + (4 * R0) - (4 * F)
     
         M = np.block([[A00, A02],
                       [B20, B22]]).astype(np.float64)
     
+        M0 = M.copy()
         b = np.zeros(2*G, dtype=np.float64)
         if normalize == "sum_phi0":
             M[0, :] = 0.0
@@ -1417,6 +1424,7 @@ class Sp3:
         else: raise ValueError("normalize must be 'sum_phi0' or 'sum_scalar'")
     
         x = np.linalg.solve(M, b)
+
         return x[:G], x[G:]
     
 ####################### RUN ########################
@@ -1424,8 +1432,8 @@ process = psutil.Process(os.getpid())
 stt = time.time()
 NH = 1
 xs_tol = 5 # percent
-B2 = .01
-nbins = 20000
+B2 = 0.0
+nbins = 10000
 #B2 = np.linspace(-.025,.025,6)
 few_groups = 8
 fromH5 = False
