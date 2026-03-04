@@ -1,0 +1,86 @@
+Initializing, 25000 Groups
+Initial Flux Time: 1.0917 s
+Starting calculation. Saving Data = False
+Build Sigma_gtg and Ln for Uranium, NU = 0.1
+Sigma_gtg A=238 Time: 6.75811 s
+Ln A = 238 Time: 15.24486 s
+Build Sigma_gtg and Ln for Hydrogen, NH = 0.5
+Sigma_gtg A=1 Time: 20.82997 s
+Ln A = 1 Time: 11.63804 s
+Calculating phi on CPU
+phi0 Time: 154.32279 s
+phi2 Time: 58.98579 s
+L2 norm on phi0 and Phi0, B2 = 0.0001: 1.3466739163927425e-07
+Plotting phi0, phi2
+Few Group Cross-Sections
+Update A=238 total xs: 0.00407 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, total: 1.322086361434123e-07
+Update A=1 total xs: 0.00355 s
+L2 norm on phi0 and Phi0 weighted xs's for A=1, total: 3.6415139665248554e-07
+Update A=238 nu_sigma_f xs: 0.00351 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, nu_sigma_f: 1.8467081841022427e-09
+Update A=238 chi xs: 0.00348 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, chi: 5.905286772392154e-06
+Uranium Group->Group Few Group Cross-Sections
+Update A=238 sigma_s0 xs: 40.03997 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=0: 4.159125237383438e-07
+Update A=238 sigma_s1 xs: 39.9697 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=1: 2.0076574707126316e-06
+Update A=238 sigma_s2 xs: 39.95183 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=2: 6.447432803740759e-07
+Update A=238 sigma_s3 xs: 39.95355 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=3: 1.032640443115404e-06
+Hydrogen Group->Group Few Group Cross-Sections
+Update A=1 sigma_s0 xs: 40.15995 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=0: 1.7472936891147086e-07
+Update A=1 sigma_s1 xs: 40.16548 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=1: 2.886494113237459e-07
+Update A=1 sigma_s2 xs: 40.68576 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=2: 7.477932774764226e-07
+Update A=1 sigma_s3 xs: 40.45851 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=3: 1.6641024605941097e-05
+Calculating Phi0/Phi2 weighted Diffusion Coefficients
+D_coef Time: 303.25683 s
+L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: 0.0008928433534317853
+32.1659, Diffusion Coef 2
+Comparing FG Constants
+B2 Eigenvalue Conv
+Iter 1: B2 = -0.231246, Res = 0.231346
+Iter 11: B2 = -0.772907, Res = 0.0084509
+Iter 21: B2 = -0.740564, Res = 0.000823277
+Iter 31: B2 = -0.737445, Res = 0.000121938
+Iter 41: B2 = -0.736829, Res = 3.28254e-05
+Iter 51: B2 = -0.736646, Res = 1.04177e-05
+Iter 61: B2 = -0.736587, Res = 3.37512e-06
+Iter 71: B2 = -0.736567, Res = 1.09595e-06
+Iter 81: B2 = -0.736561, Res = 3.55964e-07
+Iter 91: B2 = -0.736559, Res = 1.1562e-07
+Iter 101: B2 = -0.736558, Res = 3.75546e-08
+Iter 111: B2 = -0.736558, Res = 1.21981e-08
+Converged B2: -0.736558 in 113 iters and 9.583473e-03 seconds
+[9.16988187e-01 7.79590445e-02 4.27679726e-03 6.52599082e-04
+ 1.01376630e-04 1.77446007e-05 3.85386564e-06 3.97027250e-07]
+[3.35410973e-01 2.55734294e-02 1.11560910e-03 1.51308417e-04
+ 2.47801366e-05 4.65892980e-06 1.02338018e-06 1.23394784e-07]
+B2 Eigenvalue New
+Iter 1: B2 = -0.254867, Res = 0.254967
+Iter 11: B2 = -0.727543, Res = 0.0005557
+Iter 21: B2 = -0.72382, Res = 0.000331015
+Iter 31: B2 = -0.721878, Res = 0.000110659
+Iter 41: B2 = -0.721262, Res = 3.44542e-05
+Iter 51: B2 = -0.721071, Res = 1.072e-05
+Iter 61: B2 = -0.721011, Res = 3.33501e-06
+Iter 71: B2 = -0.720993, Res = 1.03752e-06
+Iter 81: B2 = -0.720987, Res = 3.22771e-07
+Iter 91: B2 = -0.720985, Res = 1.00414e-07
+Iter 101: B2 = -0.720984, Res = 3.12388e-08
+Converged B2: -0.720984 in 111 iters and 1.118088e-02 seconds
+[9.34439753e-01 5.32232686e-02 1.02060156e-02 1.84434174e-03
+ 2.37207532e-04 3.97800908e-05 9.11922930e-06 5.14617285e-07]
+[2.38335154e+00 1.62270182e-01 6.00361050e-03 8.23862607e-04
+ 1.39522288e-04 2.53588178e-05 5.26163964e-06 6.63229077e-07]
+L2 Norm on Conventional and New SP3 Equations, phi0: 0.030870869590131363
+L2 Norm on Conventional and New SP3 Equations, phi2: 0.010563649452046305
+Percent Error on Conventional and New SP3 Equations, B2: 2.11442%
+Calculation Time = 938.203624
+Memory used: 80.826 GB

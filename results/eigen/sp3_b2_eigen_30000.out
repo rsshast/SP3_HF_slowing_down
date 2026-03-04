@@ -1,0 +1,87 @@
+Initializing, 30000 Groups
+Initial Flux Time: 1.27407 s
+Starting calculation. Saving Data = False
+Build Sigma_gtg and Ln for Uranium, NU = 0.1
+Sigma_gtg A=238 Time: 6.66466 s
+Ln A = 238 Time: 18.33084 s
+Build Sigma_gtg and Ln for Hydrogen, NH = 0.5
+Sigma_gtg A=1 Time: 28.19491 s
+Ln A = 1 Time: 14.3308 s
+Calculating phi on CPU
+phi0 Time: 241.28964 s
+phi2 Time: 73.89363 s
+L2 norm on phi0 and Phi0, B2 = 0.0001: 1.3194444752303555e-07
+Plotting phi0, phi2
+Few Group Cross-Sections
+Update A=238 total xs: 0.00655 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, total: 1.3647111036409214e-07
+Update A=1 total xs: 0.00604 s
+L2 norm on phi0 and Phi0 weighted xs's for A=1, total: 4.1408534655410654e-07
+Update A=238 nu_sigma_f xs: 0.00603 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, nu_sigma_f: 1.9383813998901166e-09
+Update A=238 chi xs: 0.00601 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, chi: 6.834287200111529e-06
+Uranium Group->Group Few Group Cross-Sections
+Update A=238 sigma_s0 xs: 44.75308 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=0: 5.020141991744208e-07
+Update A=238 sigma_s1 xs: 44.72187 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=1: 2.3612491794026076e-06
+Update A=238 sigma_s2 xs: 43.96988 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=2: 7.927238927019257e-07
+Update A=238 sigma_s3 xs: 45.61494 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=3: 7.745328073161302e-07
+Hydrogen Group->Group Few Group Cross-Sections
+Update A=1 sigma_s0 xs: 45.37519 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=0: 2.1035492760636104e-07
+Update A=1 sigma_s1 xs: 45.17252 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=1: 3.4617553184820803e-07
+Update A=1 sigma_s2 xs: 45.18723 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=2: 8.912887787190915e-07
+Update A=1 sigma_s3 xs: 45.57574 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=3: 1.934680853451881e-05
+Calculating Phi0/Phi2 weighted Diffusion Coefficients
+D_coef Time: 379.57456 s
+L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: 0.0007374752529553465
+32.2495, Diffusion Coef 2
+Comparing FG Constants
+B2 Eigenvalue Conv
+Iter 1: B2 = -0.23083, Res = 0.23093
+Iter 11: B2 = -0.772763, Res = 0.00840502
+Iter 21: B2 = -0.740577, Res = 0.000816637
+Iter 31: B2 = -0.737496, Res = 0.000119718
+Iter 41: B2 = -0.736892, Res = 3.20897e-05
+Iter 51: B2 = -0.736713, Res = 1.01784e-05
+Iter 61: B2 = -0.736655, Res = 3.29742e-06
+Iter 71: B2 = -0.736636, Res = 1.07073e-06
+Iter 81: B2 = -0.73663, Res = 3.47775e-07
+Iter 91: B2 = -0.736628, Res = 1.12962e-07
+Iter 101: B2 = -0.736628, Res = 3.66917e-08
+Iter 111: B2 = -0.736628, Res = 1.1918e-08
+Converged B2: -0.736628 in 113 iters and 9.327412e-03 seconds
+[9.16971206e-01 7.79639251e-02 4.28803158e-03 6.53433699e-04
+ 1.01416171e-04 1.77377171e-05 3.85263902e-06 3.96873495e-07]
+[3.35408572e-01 2.55744618e-02 1.11662912e-03 1.51533887e-04
+ 2.47852334e-05 4.65712822e-06 1.02302781e-06 1.23346425e-07]
+B2 Eigenvalue New
+Iter 1: B2 = -0.255271, Res = 0.255371
+Iter 11: B2 = -0.72888, Res = 0.000318219
+Iter 21: B2 = -0.723779, Res = 0.000408422
+Iter 31: B2 = -0.721412, Res = 0.000134094
+Iter 41: B2 = -0.720668, Res = 4.15214e-05
+Iter 51: B2 = -0.720437, Res = 1.28492e-05
+Iter 61: B2 = -0.720366, Res = 3.97597e-06
+Iter 71: B2 = -0.720344, Res = 1.23029e-06
+Iter 81: B2 = -0.720337, Res = 3.80694e-07
+Iter 91: B2 = -0.720335, Res = 1.17799e-07
+Iter 101: B2 = -0.720334, Res = 3.64511e-08
+Iter 111: B2 = -0.720334, Res = 1.12792e-08
+Converged B2: -0.720334 in 113 iters and 1.103139e-02 seconds
+[9.29853878e-01 5.68271088e-02 1.10110787e-02 1.99878713e-03
+ 2.55941869e-04 4.28356766e-05 9.81609901e-06 5.53992447e-07]
+[2.60341000e+00 1.73950132e-01 6.43646779e-03 8.85721586e-04
+ 1.49984386e-04 2.72539052e-05 5.65453157e-06 7.12740602e-07]
+L2 Norm on Conventional and New SP3 Equations, phi0: 0.025685834784562524
+L2 Norm on Conventional and New SP3 Equations, phi2: 0.012167964349277645
+Percent Error on Conventional and New SP3 Equations, B2: 2.2119%
+Calculation Time = 1169.363593
+Memory used: 115.847 GB

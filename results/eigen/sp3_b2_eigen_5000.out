@@ -1,0 +1,67 @@
+Initializing, 5000 Groups
+Initial Flux Time: 0.21608 s
+Starting calculation. Saving Data = False
+Build Sigma_gtg and Ln for Uranium, NU = 0.1
+Sigma_gtg A=238 Time: 5.39808 s
+Ln A = 238 Time: 0.67442 s
+Build Sigma_gtg and Ln for Hydrogen, NH = 0.5
+Sigma_gtg A=1 Time: 0.95882 s
+Ln A = 1 Time: 0.29907 s
+Calculating phi on CPU
+phi0 Time: 4.46988 s
+phi2 Time: 1.52658 s
+L2 norm on phi0 and Phi0, B2 = 0.0001: 2.3264931202480144e-07
+Plotting phi0, phi2
+Few Group Cross-Sections
+Update A=238 total xs: 0.00253 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, total: 1.358013851859681e-07
+Update A=1 total xs: 0.00231 s
+L2 norm on phi0 and Phi0 weighted xs's for A=1, total: 1.8515065432320737e-07
+Update A=238 nu_sigma_f xs: 0.00232 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, nu_sigma_f: 3.32292771970728e-09
+Update A=238 chi xs: 0.00229 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, chi: 2.1952565615064616e-06
+Uranium Group->Group Few Group Cross-Sections
+Update A=238 sigma_s0 xs: 0.42603 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=0: 9.773890651285226e-08
+Update A=238 sigma_s1 xs: 0.42461 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=1: 7.14377898560793e-07
+Update A=238 sigma_s2 xs: 0.42479 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=2: 1.6610155547296405e-07
+Update A=238 sigma_s3 xs: 0.42517 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=3: 1.4546977170985232e-07
+Hydrogen Group->Group Few Group Cross-Sections
+Update A=1 sigma_s0 xs: 0.43061 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=0: 4.1441014245086884e-08
+Update A=1 sigma_s1 xs: 0.43211 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=1: 6.307996837421285e-08
+Update A=1 sigma_s2 xs: 0.43008 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=2: 1.7438290784097556e-07
+Update A=1 sigma_s3 xs: 0.43878 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=3: 5.85402521077092e-06
+Calculating Phi0/Phi2 weighted Diffusion Coefficients
+D_coef Time: 5.75488 s
+L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: 0.0013603230334457313
+Comparing FG Constants
+B2 Eigenvalue Conv
+Iter 1: B2 = -0.235469, Res = 2355.69
+Iter 21: B2 = -0.738735, Res = 0.00106941
+Iter 41: B2 = -0.735236, Res = 4.04595e-05
+Iter 61: B2 = -0.735017, Res = 4.15189e-06
+Iter 81: B2 = -0.734994, Res = 4.37788e-07
+Iter 101: B2 = -0.734992, Res = 4.61763e-08
+Converged B2: -0.734991 in 115 iters and 9.390116e-03 seconds
+B2 Eigenvalue New
+Iter 1: B2 = -0.200093, Res = 2001.93
+Iter 21: B2 = -0.731163, Res = 0.000270529
+Iter 41: B2 = -0.732412, Res = 2.23256e-05
+Iter 61: B2 = -0.732534, Res = 2.2963e-06
+Iter 81: B2 = -0.732546, Res = 2.36373e-07
+Iter 101: B2 = -0.732548, Res = 2.43319e-08
+Converged B2: -0.732548 in 109 iters and 1.074958e-02 seconds
+Not Converged, Increase number of iterations
+L2 Norm on Conventional and New SP3 Equations, phi0: 0.04806487033376154
+L2 Norm on Conventional and New SP3 Equations, phi2: 0.0006235531026925951
+Percent Error on Conventional and New SP3 Equations, B2: 0.33247%
+Calculation Time = 25.916017
+Memory used: 3.958 GB

@@ -1,0 +1,84 @@
+Initializing, 10000 Groups
+Initial Flux Time: 0.43233 s
+Starting calculation. Saving Data = False
+Build Sigma_gtg and Ln for Uranium, NU = 0.1
+Sigma_gtg A=238 Time: 5.33209 s
+Ln A = 238 Time: 2.24404 s
+Build Sigma_gtg and Ln for Hydrogen, NH = 0.5
+Sigma_gtg A=1 Time: 3.32313 s
+Ln A = 1 Time: 2.05659 s
+Calculating phi on CPU
+phi0 Time: 16.89943 s
+phi2 Time: 7.71391 s
+L2 norm on phi0 and Phi0, B2 = 0.0001: 1.7378084131987664e-07
+Plotting phi0, phi2
+Few Group Cross-Sections
+Update A=238 total xs: 0.00529 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, total: 1.295424816528287e-07
+Update A=1 total xs: 0.00484 s
+L2 norm on phi0 and Phi0 weighted xs's for A=1, total: 2.2422154523426814e-07
+Update A=238 nu_sigma_f xs: 0.00483 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, nu_sigma_f: 1.6070838460711448e-09
+Update A=238 chi xs: 0.00481 s
+L2 norm on phi0 and Phi0 weighted xs's for A=238, chi: 3.1183367387704937e-06
+Uranium Group->Group Few Group Cross-Sections
+Update A=238 sigma_s0 xs: 5.18114 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=0: 1.5828565407313548e-07
+Update A=238 sigma_s1 xs: 5.04044 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=1: 9.839930192297712e-07
+Update A=238 sigma_s2 xs: 5.04332 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=2: 1.8108060758246569e-06
+Update A=238 sigma_s3 xs: 5.05363 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=238 and l=3: 0.00019350485431158347
+Hydrogen Group->Group Few Group Cross-Sections
+Update A=1 sigma_s0 xs: 5.03083 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=0: 7.011508648638818e-08
+Update A=1 sigma_s1 xs: 5.12699 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=1: 1.1684445771114419e-07
+Update A=1 sigma_s2 xs: 5.24428 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=2: 3.170767355330401e-07
+Update A=1 sigma_s3 xs: 5.00728 s
+L2 norm on phi0 vs Phi0 weighted gtg for A=1 and l=3: 8.532435247543203e-06
+Calculating Phi0/Phi2 weighted Diffusion Coefficients
+D_coef Time: 40.99473 s
+L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: 0.0014955534713273538
+31.6999, Diffusion Coef 2
+Comparing FG Constants
+B2 Eigenvalue Conv
+Iter 1: B2 = -0.233617, Res = 0.233717
+Iter 11: B2 = -0.769868, Res = 0.00817553
+Iter 21: B2 = -0.73926, Res = 0.00073263
+Iter 31: B2 = -0.736627, Res = 9.53425e-05
+Iter 41: B2 = -0.736159, Res = 2.43383e-05
+Iter 51: B2 = -0.736024, Res = 7.6661e-06
+Iter 61: B2 = -0.735981, Res = 2.48151e-06
+Iter 71: B2 = -0.735967, Res = 8.05686e-07
+Iter 81: B2 = -0.735962, Res = 2.61675e-07
+Iter 91: B2 = -0.73596, Res = 8.49918e-08
+Iter 101: B2 = -0.73596, Res = 2.76053e-08
+Converged B2: -0.73596 in 111 iters and 9.241104e-03 seconds
+[9.17053299e-01 7.79467320e-02 4.24688670e-03 6.32250342e-04
+ 9.91970593e-05 1.74549416e-05 3.78896075e-06 3.90547349e-07]
+[3.35393891e-01 2.55655582e-02 1.10860215e-03 1.48184303e-04
+ 2.42356835e-05 4.58233706e-06 1.00624253e-06 1.21372902e-07]
+B2 Eigenvalue New
+Iter 1: B2 = -0.254405, Res = 0.254505
+Iter 11: B2 = -0.725565, Res = 0.00155992
+Iter 21: B2 = -0.727532, Res = 1.29748e-05
+Iter 31: B2 = -0.727356, Res = 1.21202e-05
+Iter 41: B2 = -0.727287, Res = 3.88782e-06
+Iter 51: B2 = -0.727265, Res = 1.23731e-06
+Iter 61: B2 = -0.727258, Res = 3.93235e-07
+Iter 71: B2 = -0.727256, Res = 1.24955e-07
+Iter 81: B2 = -0.727255, Res = 3.97053e-08
+Iter 91: B2 = -0.727255, Res = 1.26167e-08
+Converged B2: -0.727255 in 94 iters and 9.326696e-03 seconds
+[9.45877864e-01 4.42011486e-02 8.29461507e-03 1.39921526e-03
+ 1.87600278e-04 3.18345322e-05 7.31048863e-06 4.12246477e-07]
+[1.83414619e+00 1.35243686e-01 4.99250479e-03 6.68924267e-04
+ 1.12476675e-04 2.04879829e-05 4.25475868e-06 5.36570580e-07]
+L2 Norm on Conventional and New SP3 Equations, phi0: 0.04457129422442451
+L2 Norm on Conventional and New SP3 Equations, phi2: 0.003480359924717808
+Percent Error on Conventional and New SP3 Equations, B2: 1.18278%
+Calculation Time = 128.060296
+Memory used: 13.587 GB
