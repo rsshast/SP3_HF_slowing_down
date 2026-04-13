@@ -28,29 +28,33 @@ Then, calculate the fission source, create new flux weighted cross-sections (xs'
     * Energy ranges
     * Materials and number densities
     * Cross-section data processing and generation to order L=3
+    * Data for wims 2, 4, 8, 32, 69, and 172 group structures
   * Reference solution from Scattering Source Solution, sp3.p0
   * Parametric Leakage Calculation
   * $\phi_0, \phi_2, \Phi_0, \Phi_2$ Calculations using the Loss Operator Driven Method
   * Tensorized and GPU Compatible Methods for Solving the Slowing-Down Spectrum
   * Result Analysis
   * Flux Weighted Cross-Section and Diffusion Coefficient Generation (Group Constants)
+  * Iterative solve on critical buckling parameter $B^2$
 
 Completed Work:
   * Transformed from Energy to Lethargy Discretization in Energy
-  * Generated group to group xs's for Legendre expansions [0,3] for H1 and U235
+  * Generated group to group xs's for Legendre expansions [0,3] for H1 and U238
+  * Upscattering cross-sections beginning at T=4eV. 
   * Integrated those cross sections to find the Loss Operator on the same range
   * Found the slowing down flux spectrum $\phi_0$ and weighting function $\phi_2$
   * Used those fine grid fluxes to calculate flux weighted xs's and diffusion coefficients
   * Exported to torch.tensor and GPU
+  * Incorporate Anisotropic Group-Coupled Upscatter to reference and $SP_3$ solutions
+  * Flux solutions to the new and traditional SP$_3$ equations
+  * Hyperfine group search to find buckling parameter $B^2$
 
 Current work: 
-  * Incorporate Anisotropic Group-Coupled Upscatter to reference and $SP_3$ solutions
+  * Compare solution to known benchmark
 
 Future Work:
-  * Continuous Energy Monte-Carlo to find buckling parameter $B^2$
   * Submit research as a journal publication
 
 Assumptions:
-  * Constant gridspacing in lethargy
   * Group constants are constant within the energy group
   * Homogenous media weighted by number densities

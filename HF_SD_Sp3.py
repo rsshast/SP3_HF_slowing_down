@@ -280,7 +280,12 @@ class Sp3:
         # grp constant parameters
         self.use_wims = wims
         if self.use_wims:
-            wims69 = np.loadtxt(f"{self.data_dir}wims69.txt") # dropped the header from the file
+            #wims69 = np.loadtxt(f"{self.data_dir}two_grp_struct.txt") # dropped the header from the file
+            #wims69 = np.loadtxt(f"{self.data_dir}five_grp_struct.txt") # dropped the header from the file
+            #wims69 = np.loadtxt(f"{self.data_dir}eight_grp_struct.txt") # dropped the header from the file
+            #wims69 = np.loadtxt(f"{self.data_dir}wims32.txt") # dropped the header from the file
+            #wims69 = np.loadtxt(f"{self.data_dir}wims69.txt") # dropped the header from the file
+            wims69 = np.loadtxt(f"{self.data_dir}wims168.txt") # dropped the header from the file
             self.custom_bounds = wims69[:,1]
             self.few_groups = self.custom_bounds.size
             self.E0 = np.max(self.custom_bounds)
@@ -380,7 +385,8 @@ class Sp3:
         self.boundaries = XS38[:,0]
         self.Evec = self.E0 * np.exp(-self.boundaries)
         print(f"Initializing, {self.nbins - 1} Groups")
-        assert (self.nbins - 1) % self.few_groups == 0, ("Number of fine bins must be multiple of number of coarse bins")
+        print(f"Collapse to {self.few_groups} Groups")
+        #assert (self.nbins - 1) % self.few_groups == 0, ("Number of fine bins must be multiple of number of coarse bins")
 
         # cross-sections and number densities
         self.sigma_fr_U = self.get_data(sigma_fr_U,self.nbins)[:,1] * self.NU
@@ -542,7 +548,7 @@ class Sp3:
             x, w = np.polynomial.legendre.leggauss(self.nquad)
             dE_full = np.abs(np.diff(self.Evec))
             E_mid_full = 0.5 * (self.Evec[:-1] + self.Evec[1:])
-            insert_idx = np.where(E_mid_full < 20.0)[0][0]
+            insert_idx = np.where(E_mid_full < 4.0)[0][0]
     
             # generate upscatter xs's, call the functions outside the class 
             P0_mat = build_p0_thermal_to_all(E_mid_full, sig_s, gmax_vec, A, self.kT, self.m, x, w, dE_full, insert_idx)
@@ -1131,7 +1137,7 @@ class Sp3:
 
         if self.save_data == True: self.save_Dn(self.D_conv_0,self.D0,self.D2,self.save_dir,key=None)
 
-    def run(self, verbose=False, transport=False, b2_tol=1e-8, max_outer_iters=25):
+    def run(self, verbose=False, transport=False, b2_tol=1e-5, max_outer_iters=10):
         self.initial_flux()
         if self.fromH5 == True: 
             self.read_data()
@@ -1174,8 +1180,9 @@ class Sp3:
             print("\n--- Starting Fundamental Mode Buckling Search ---")
             current_B2 = 0.0 # Strict infinite medium start
             
+            #omegas = np.linspace(1.55,1.65,21)
             for outer_iter in range(max_outer_iters):
-                print(f"\nOuter Iteration {outer_iter + 1} | Input B2 = {current_B2:5e}")
+                print(f"\nNew Outer Iteration {outer_iter + 1} | Input B2 = {current_B2:5e}")
                 self.B2 = current_B2
                 
                 # solve slowing down spectrum on fine grid
@@ -1204,14 +1211,15 @@ class Sp3:
                 self.upd_grp_constants(verbose=False)
                 
                 # eigenvalue solver for B2
+                #for omega in (omegas):
                 new_B2, fg_phi0, fg_phi2 = self.B2_eigenvalue_new(
-                    self.D0, self.D2, 
-                    self.Sig_t_0, self.Sig_t_0, 
-                    self.Sig_s0_0, self.Sig_s0_0, self.Sig_s2_0, 
-                    self.Chi, self.Sig_f_0, self.Sig_f_0,
-                    current_B2
-                )
-                
+                        self.D0, self.D2, 
+                        self.Sig_t_0, self.Sig_t_0, 
+                        self.Sig_s0_0, self.Sig_s0_0, self.Sig_s2_0, 
+                        self.Chi, self.Sig_f_0, self.Sig_f_0,
+                        current_B2, 
+                        #omega=omega,
+                    )
                 # check convergence
                 if abs(current_B2) > 0: err = abs(new_B2 - current_B2) / abs(current_B2)
                 else: err = abs(new_B2) 
@@ -1220,7 +1228,9 @@ class Sp3:
                 
                 if err < b2_tol and outer_iter > 0:
                     print(f"\n*** Fundamental Mode Search Converged in {outer_iter+1} iterations! ***")
-                    self.B2 = new_B2
+                    self.B2_new = new_B2
+                    self.phi0_sp3_new = fg_phi0
+                    self.phi2_sp3_new = fg_phi2
                     break
                     
                 current_B2 = new_B2
@@ -1229,19 +1239,67 @@ class Sp3:
             else:
                 print("\n*** Warning: Reached max iterations without converging! ***")
 
-            # plot and save
-            self.plot_fluxes()
+            self.B2_new = new_B2
+            self.phi0_sp3_new = fg_phi0
+            self.phi2_sp3_new = fg_phi2
+            # CONVENTIONAL FUNDAMENTAL MODE SEARCH LOOP
+            # =====================================================================
+            print("\n--- Starting Conventional Fundamental Mode Buckling Search ---")
+            current_B2_conv = 0.0 # Start fresh for the conventional solver
+            
+            for outer_iter in range(max_outer_iters):
+                print(f"\nConv Outer Iteration {outer_iter + 1} | Input B2 = {current_B2_conv:5e}")
+                self.B2 = current_B2_conv
+                
+                # 1. Solve slowing down spectrum on fine grid (using current_B2_conv)
+                stt = time.time()
+                B4 = self.B2 * self.B2
+                LHS = self.L3210 + self.B2 * self.L_B2_term
+                np.fill_diagonal(LHS, LHS.diagonal() + 9 * B4)
+                RHS = (self.L321_source + self.B2 * self.L_source_B2) @ self.chi
+                self.phi0 = np.linalg.solve(LHS, RHS)
+                
+                RHS2 = 0.5 * (-9 * self.B2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
+                self.phi2 = np.linalg.solve(self.L32, RHS2)
+                self.calc_Phi()
+                
+                # 2. Update few-group constants based on the new conventional spectrum
+                self.upd_grp_constants(verbose=False)
+                
+                # 3. Solve Conventional Eigenvalue
+                new_B2_conv, fg_phi0_conv, fg_phi2_conv = self.B2_eigenvalue_conv(
+                    self.Sig_t,
+                    self.Sig_s0, self.Sig_s2,
+                    self.Chi, self.Sig_f,
+                    self.D_conv_0, self.D_conv_2,
+                    current_B2_conv
+                )
+                
+                # 4. Check Convergence
+                if abs(current_B2_conv) > 0: 
+                    err = abs(new_B2_conv - current_B2_conv) / abs(current_B2_conv)
+                else: 
+                    err = abs(new_B2_conv)
+                    
+                print(f"Resulting Conv B2 = {new_B2_conv:5e} | Relative Error = {err:5e}")
+                
+                if err < b2_tol and outer_iter > 0:
+                    print(f"\n*** Conventional Search Converged in {outer_iter+1} iterations! ***")
+                    self.B2_conv = new_B2_conv
+                    self.phi0_sp3_conv = fg_phi0_conv
+                    self.phi2_sp3_conv = fg_phi2_conv
+                    break
+                    
+                current_B2_conv = new_B2_conv
+                gc.collect()
+            else:
+                print("\n*** Warning: Conventional solver reached max iterations without converging! ***")
+            self.B2_conv = new_B2_conv
+            self.phi0_sp3_conv = fg_phi0_conv
+            self.phi2_sp3_conv = fg_phi2_conv
             if self.save_data: self.save_fluxes()
             
-        self.B2_new = self.B2
-        self.phi0_sp3_new = fg_phi0
-        self.phi2_sp3_new = fg_phi2
-        self.B2_conv, self.phi0_sp3_conv, self.phi2_sp3_conv = self.B2_eigenvalue_conv(
-                                                                self.Sig_t, 
-                                                                self.Sig_s0, self.Sig_s2, 
-                                                                self.Chi, self.Sig_f, 
-                                                                self.D_conv_0, self.D_conv_2,
-                                                                self.B2)
+        # plot and save
         phi0_fg, phi2_fg = self.few_group_fluxes(key=None)
         self.plot_few_grp_sp3_eqns(phi0_fg)
 
@@ -1326,7 +1384,7 @@ class Sp3:
         df.to_hdf(f"{self.save_dir}fluxes_{self.NH}.h5", key="df", mode="w", format="table")
         #df.to_csv(f"{self.save_dir}fluxes_{self.NH}.csv")
 
-        df = pd.DataFrame({'sigma_t_U': self.sig_t_U, 'sigma_t_H': self.sig_t_H,'sigma_t_O': self.sig_t_O,
+        df = pd.DataFrame({'sigma_t_U': self.sig_t_U, 'sigma_t_H': self.sig_t_H,#'sigma_t_O': self.sig_t_O,
                             'nu_sigma_f': self.sigma_f})
         df.to_hdf(f"{self.save_dir}fine_group_xs_vectors_{self.NH}.h5", key="df", mode="w", format="table")
 
@@ -1560,7 +1618,7 @@ class Sp3:
         #plt.step(Efg[:-1], self.phi0_sp3_conv, where='post', label=fr'$\phi_0^{{conv}}$, $B^2 =$ {self.B2_conv:5g}')
         plt.step(Efg, phi0_new_plot, where='post', label=fr'$\phi_0^{{new}}$, $B^2 =$ {self.B2_new:5g}')
         plt.step(Efg, phi0_conv_plot, where='post', label=fr'$\phi_0^{{conv}}$, $B^2 =$ {self.B2_conv:5g}')
-        plt.step(Efg, phi0_fg/np.sum(phi0_fg), where='post', label=r'$\phi_0^{{FG}}$, $B^2 = 0.0$')
+        #plt.step(Efg, phi0_fg/np.sum(phi0_fg), where='post', label=r'$\phi_0^{{FG}}$, $B^2 = 0.0$', alpha = .5, linestyle='dashed')
         plt.title(f"Scalar Flux 0th Moment")
         plt.xlabel('Energy (MeV)')
         plt.ylabel(r'$\phi_0 (E)$')
@@ -1859,7 +1917,7 @@ class Sp3:
 
     @staticmethod
     def B2_eigenvalue_conv(Sig_t, Sig_s0, Sig_s2, chi, nuSigf, D0, D2, B2_guess = 1e-4,
-                            max_iters = 1000, tol = 1e-8, omega = 1.0, boost = 1):
+                            max_iters = 1000, tol = 1e-8, omega = 1.2, boost = 1):
         # eigenvalue solve for critical buckling B2
         print("B2 Eigenvalue Conv")
         G = chi.size
@@ -1986,7 +2044,7 @@ class Sp3:
 #        return B2, Phi0, Phi2
 
     @staticmethod
-    def B2_eigenvalue_new(D0, D2, Sig_t_0, Sig_t_2, Sig_s0_0, Sig_s0_2, Sig_s2_2, chi, nuSigf0, nuSigf2, B2_guess=-1e-4, max_iters=10000, tol=1e-8, omega=1.0, boost=1):
+    def B2_eigenvalue_new(D0, D2, Sig_t_0, Sig_t_2, Sig_s0_0, Sig_s0_2, Sig_s2_2, chi, nuSigf0, nuSigf2, B2_guess=-1e-4, max_iters=5000, tol=1e-8, omega=1.2, boost=1):
         print("--- B2 Eigenvalue New ---")
         G = chi.size
         chi = chi / np.sum(chi)
@@ -2144,19 +2202,15 @@ stt = time.time()
 NH = .10
 xs_tol = 5 # percent
 B2 = 0.0
-nbins = 10000
+nbins = 9000
 #B2 = np.linspace(-.0011,.0011,6)
 #few_groups = 8
 fromH5 = False
 verbose = False
 adaptive = False
-#fg_bounds = np.array([10e6, 1e6, 500e3, 20e3, 1e3, 100, 20, 1, 0.01])
-#fg_bounds = np.array([10e6, 1e6, 500e3, 100e3, 10e3, 10, 1, .5, .01])
-#fg_bounds = np.array([10e6, 1e6, 100e3, 1e3, 100, 10, 1, .1, .01])
 
 # init class
-sp3 = Sp3(nbins, B2, NH, fromH5, adaptive, xs_tol, wims=False)
-#sp3 = Sp3(nbins, B2, NH, few_groups, fromH5, adaptive, xs_tol, fg_bounds)
+sp3 = Sp3(nbins, B2, NH, fromH5, adaptive, xs_tol, wims=True)
 sp3.run(verbose)
 
 stp = time.time()
