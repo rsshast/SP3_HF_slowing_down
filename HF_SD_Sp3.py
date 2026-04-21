@@ -19,8 +19,6 @@ import gc
 def build_p0_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
     G = len(E_full)
     N_th = G - insert_idx
-
-    # Matrix shape: (Thermal incident groups, ALL possible exit groups)
     sigma_th_all = np.zeros((N_th, G))
 
     for i in prange(N_th):
@@ -29,12 +27,7 @@ def build_p0_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_
         sig_val = sigma_fr_full[gp]
         E_prime = E_full[gp]
 
-        # gmax_vec now perfectly aligns with the absolute incident index!
-        #gmax = G
         gmax = min(gmax_vec[gp],G)
-        
-        #gmax = min(int(gmax_vec[gp]) + 100, G)
-
         for g in range(0, gmax):
             E_exit = E_full[g]
             val = eval_p0_kernel_numba(E_prime, E_exit, A, sig_val, kT, m, x, w)
@@ -46,17 +39,12 @@ def build_p0_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_
 def build_p1_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
     G = len(E_full)
     N_th = G - insert_idx
-
-    # Matrix shape: (Thermal incident groups, ALL possible exit groups)
     sigma_th_all = np.zeros((N_th, G))
 
     for i in prange(N_th):
-        # gp is the absolute index in the full grid
         gp = insert_idx + i
         sig_val = sigma_fr_full[gp]
         E_prime = E_full[gp]
-        #gmax = G
-        #gmax = gmax_vec[gp]
         gmax = min(gmax_vec[gp],G)
 
         for g in range(0, gmax):
@@ -70,22 +58,14 @@ def build_p1_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_
 def build_p2_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
     G = len(E_full)
     N_th = G - insert_idx
-
-    # Matrix shape: (Thermal incident groups, ALL possible exit groups)
     sigma_th_all = np.zeros((N_th, G))
 
     for i in prange(N_th):
-        # gp is the absolute index in the full grid
         gp = insert_idx + i
         sig_val = sigma_fr_full[gp]
         E_prime = E_full[gp]
 
-        #gmax = G
-        #gmax = gmax_vec[gp]
         gmax = min(gmax_vec[gp],G)
-        # gmax_vec now perfectly aligns with the absolute incident index!
-        #gmax = min(int(gmax_vec[gp]) + 100, G)
-
         for g in range(0, gmax):
             E_exit = E_full[g]
             val = eval_p2_kernel_numba(E_prime, E_exit, A, sig_val, kT, m, x, w)
@@ -97,22 +77,14 @@ def build_p2_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_
 def build_p3_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
     G = len(E_full)
     N_th = G - insert_idx
-
-    # Matrix shape: (Thermal incident groups, ALL possible exit groups)
     sigma_th_all = np.zeros((N_th, G))
 
     for i in prange(N_th):
-        # gp is the absolute index in the full grid
         gp = insert_idx + i
         sig_val = sigma_fr_full[gp]
         E_prime = E_full[gp]
 
-        # gmax_vec now perfectly aligns with the absolute incident index!
-        #gmax = min(int(gmax_vec[gp]) + 100, G)
-        #gmax = G
         gmax = min(gmax_vec[gp],G)
-        #gmax = gmax_vec[gp]
-
         for g in range(0, gmax):
             E_exit = E_full[g]
             val = eval_p3_kernel_numba(E_prime, E_exit, A, sig_val, kT, m, x, w)
@@ -281,11 +253,11 @@ class Sp3:
         self.use_wims = wims
         if self.use_wims:
             #wims69 = np.loadtxt(f"{self.data_dir}two_grp_struct.txt") # dropped the header from the file
-            #wims69 = np.loadtxt(f"{self.data_dir}five_grp_struct.txt") # dropped the header from the file
+            wims69 = np.loadtxt(f"{self.data_dir}five_grp_struct.txt") # dropped the header from the file
             #wims69 = np.loadtxt(f"{self.data_dir}eight_grp_struct.txt") # dropped the header from the file
             #wims69 = np.loadtxt(f"{self.data_dir}wims32.txt") # dropped the header from the file
             #wims69 = np.loadtxt(f"{self.data_dir}wims69.txt") # dropped the header from the file
-            wims69 = np.loadtxt(f"{self.data_dir}wims168.txt") # dropped the header from the file
+            #wims69 = np.loadtxt(f"{self.data_dir}wims168.txt") # dropped the header from the file
             self.custom_bounds = wims69[:,1]
             self.few_groups = self.custom_bounds.size
             self.E0 = np.max(self.custom_bounds)
@@ -297,7 +269,7 @@ class Sp3:
         self.fromH5 = fromH5
         self.nu = 2.43
 
-        # ranges
+        # anisotropy
         self.B2 = B2
         self.leg_order = 4
 
@@ -307,14 +279,12 @@ class Sp3:
         self.AU = 238
         self.NU = .02
         self.AO = 16
-        #self.NU = 10.97 / 270
-        #self.NH = 1 / 9
         self.NO = .1
         #self.NO = self.NH / 2
         #self.NO = self.NH * 2
 
         # mass of a neutron
-        self.m = 1 # amu, not sure if this is right
+        self.m = 1 # amu
         self.nquad = 64
         
         # point-wise cross-sections and fission spectrum
@@ -385,7 +355,7 @@ class Sp3:
         self.boundaries = XS38[:,0]
         self.Evec = self.E0 * np.exp(-self.boundaries)
         print(f"Initializing, {self.nbins - 1} Groups")
-        print(f"Collapse to {self.few_groups} Groups")
+        print(f"Collapse to {self.few_groups - 1} Groups")
         #assert (self.nbins - 1) % self.few_groups == 0, ("Number of fine bins must be multiple of number of coarse bins")
 
         # cross-sections and number densities
@@ -543,7 +513,7 @@ class Sp3:
         sigma_gtg = self.gen_sig_sn_gtg(A,sig_s,self.leg_order, self.boundaries,
                                         gmax_vec, self.alpha_fn(A), self.E0, phi, du)
 
-        # UPSCATTER BEGINS AT 20eV
+        # UPSCATTER BEGINS AT 4eV
         if upscat == True:
             x, w = np.polynomial.legendre.leggauss(self.nquad)
             dE_full = np.abs(np.diff(self.Evec))
@@ -560,12 +530,9 @@ class Sp3:
             P3_mat = build_p3_thermal_to_all(E_mid_full, sig_s, gmax_vec, A, self.kT, self.m, x, w, dE_full, insert_idx)
             sigma_gtg[3, insert_idx:, :] = P3_mat
     
-            if A == 1:
-                ref_s0 = self.sig_s0_H
-            elif A == 16:
-                ref_s0 = self.sig_s0_O
-            else:
-                ref_s0 = self.sig_s0_U
+            if A == 1: ref_s0 = self.sig_s0_H
+            elif A == 16: ref_s0 = self.sig_s0_O
+            else: ref_s0 = self.sig_s0_U
     
             # force endf xs compliance
             for gp in range(self.boundaries.size-1):
@@ -574,12 +541,9 @@ class Sp3:
                 balanced_diag = sig_s[gp] - off_diag_sum
                 sigma_gtg[0, gp, gp] = balanced_diag
     
-                if self.leg_order >= 1:
-                    sigma_gtg[1, gp, gp] = balanced_diag
-                if self.leg_order >= 2:
-                    sigma_gtg[2, gp, gp] = balanced_diag
-                if self.leg_order >= 3:
-                    sigma_gtg[3, gp, gp] = balanced_diag
+                if self.leg_order >= 1: sigma_gtg[1, gp, gp] = balanced_diag
+                if self.leg_order >= 2: sigma_gtg[2, gp, gp] = balanced_diag
+                if self.leg_order >= 3: sigma_gtg[3, gp, gp] = balanced_diag
 
         print(f"Sigma_gtg A={A} Time: {np.round(time.time()-stt,5)} s")
 
@@ -588,12 +552,9 @@ class Sp3:
         if self.save_data: self.save_sig_s_gtg(S,A,self.save_dir,self.NH)
 
         G = phi.size
-        if A == 1: 
-            self.sigma_s_gtg_H = S
-        elif A == 16: 
-            self.sigma_s_gtg_O = S
-        else: 
-            self.sigma_s_gtg_U = S
+        if A == 1: self.sigma_s_gtg_H = S
+        elif A == 16: self.sigma_s_gtg_O = S
+        else: self.sigma_s_gtg_U = S
         if verbose:
             self.plot_sig_sn_gtg(sigma_gtg, sigma_s, A)
             self.plot_each_l(A,sigma_s,sigma_gtg)
@@ -881,22 +842,9 @@ class Sp3:
             r0, r1 = fg_idx[i], fg_idx[i+1]
             for j in range(self.few_groups): # Incident group
                 c0, c1 = fg_idx[j], fg_idx[j+1]
-
-                # M[r0:r1, c0:c1] is the (exit, incident) block
-                # @ phi[c0:c1] takes the dot product across the incident fine groups
                 M_fg[i,j] = np.sum(M[r0:r1, c0:c1] @ self.phi0[c0:c1]) / np.sum(self.phi0[c0:c1])
                 M_fg_0[i,j] = np.sum(M[r0:r1, c0:c1] @ self.Phi0[c0:c1]) / np.sum(self.Phi0[c0:c1])
                 M_fg_2[i,j] = np.sum(M[r0:r1, c0:c1] @ self.Phi2[c0:c1]) / np.sum(self.Phi2[c0:c1])
-        #for i in range(self.few_groups):
-        #    stt_i, stp_i = fg_idx[i], fg_idx[i+1]
-        #    for j in range(self.few_groups):
-        #        stt_j, stp_j = fg_idx[j], fg_idx[j+1]
-        #        M_fg[i,j] = np.sum(simpson(M[stt_i:stp_i,stt_j:stp_j] * phi[stt_i:stp_i], E[stt_i:stp_i]) 
-        #                / simpson(phi[stt_i:stp_i],E[stt_i:stp_i]))
-        #        M_fg_0[i,j] = np.sum(simpson(M[stt_i:stp_i,stt_j:stp_j] * self.Phi0[stt_i:stp_i], E[stt_i:stp_i]) 
-        #                / simpson(self.Phi0[stt_i:stp_i],E[stt_i:stp_i]))
-        #        M_fg_2[i,j] = np.sum(simpson(M[stt_i:stp_i,stt_j:stp_j] * self.Phi2[stt_i:stp_i], E[stt_i:stp_i]) 
-        #                / simpson(self.Phi2[stt_i:stp_i],E[stt_i:stp_i]))
 
         M_fg_norm = M_fg / np.linalg.norm(M_fg)
         M_fg_0_norm = M_fg_0 / np.linalg.norm(M_fg_0)
@@ -906,59 +854,65 @@ class Sp3:
         return M_fg, M_fg_0, M_fg_2
 
     def Dn_coef(self, sig_s1):
-        print("Calculating Phi0/Phi2 weighted Diffusion Coefficients")
-        stt=time.time()
-        L1_inv = np.linalg.inv(self.L1)
-        L3_inv = np.linalg.inv(self.L3)
-        N = self.phi0.size
-        E = self.Evec[:-1]
-        u = self.boundaries
-        if self.use_wims:
-            self.few_groups = len(self.custom_bounds) - 1
-            fg_idx = np.zeros(self.few_groups + 1, dtype=int)
-            for i, target_E in enumerate(self.custom_bounds):
-                fg_idx[i] = np.argmin(np.abs(self.Evec - target_E))
+        print(f"Calculating Batched Diffusion Coefficients for {self.few_groups} groups...")
+        stt = time.time()
+        
+        # map to group struct
+        self.few_groups = len(self.custom_bounds) - 1
+        fg_idx = np.zeros(self.few_groups + 1, dtype=int)
+        for i, target_E in enumerate(self.custom_bounds):
+            fg_idx[i] = np.argmin(np.abs(self.Evec - target_E))
+            
+        N_fine = self.phi0.size
+        N_coarse = self.few_groups
+        
+        S_matrix = np.zeros((N_fine, N_coarse))
+        den_vec = np.zeros(N_coarse) # To store integrated group flux
+        
+        for j in range(N_coarse):
+            c0, c1 = fg_idx[j], fg_idx[j+1]
+            S_matrix[c0:c1, j] = self.Phi0[c0:c1]
+            den_vec[j] = np.sum(self.Phi0[c0:c1])
+        
+        # Avoid division by zero
+        # den_vec[den_vec < 1e-18] = 1e-18
 
-        else: fg_idx = np.linspace(0,self.phi0.size,self.few_groups+1, dtype=int)
-        D0 = np.zeros((self.few_groups,self.few_groups))
-        D = np.zeros_like(D0)
-        D2 = np.zeros_like(D0)
-        D2_conv = np.zeros_like(D0)
+        # Response_Matrix[fine_exit, coarse_incident]
+        #print("   Performing batched matrix solve...")
+        Y0_mat = np.linalg.solve(self.L1, S_matrix)
+        Y2_mat = np.linalg.solve(self.L3, S_matrix)
 
-        sigma_t = self.sig_t_U[:-1] + self.sig_t_H[:-1]
-        sigma_s0 = self.sigma_s_gtg_U[0,:,:] + self.sigma_s_gtg_H[0,:,:]
-        sigma_s2 = self.sigma_s_gtg_U[2,:,:] + self.sigma_s_gtg_H[2,:,:]
-        if isinstance(self.B2, float) or ifinstance(self.B2,int): B2 = self.B2
-        else: B2 = 0
-        D_tr = self.diff_matrix(sigma_t,sig_s1,B2)
-        D2_tr = np.diag(9 / (15 * sigma_t))
-        #D_tr = D1 * (1 - (4 * (sigma_t - sigma_s0)) / (3 * (D2_tr * B2 + (sigma_t - sigma_s2) + 4/3 * (sigma_t - sigma_s0))))
-        phi_tr = self.phi0
-        phi_tr_2 = self.phi2
-
-        for i in range(self.few_groups):
+        # 4. Collapse rows to exit coarse groups
+        D0 = np.zeros((N_coarse, N_coarse))
+        D2 = np.zeros((N_coarse, N_coarse))
+        
+        for i in range(N_coarse):
             r0, r1 = fg_idx[i], fg_idx[i+1]
-            for j in range(self.few_groups):
-                c0, c1 = fg_idx[j], fg_idx[j + 1]
-                # Integrate across incident-energy slice for every row, then average over the row block
-                D[i, j] = np.sum(D_tr[r0:r1, c0:c1] @ phi_tr[c0:c1]) / np.sum(phi_tr[c0:c1])
-                D2_conv[i, j] = np.sum(D2_tr[r0:r1, c0:c1] @ phi_tr_2[c0:c1]) / np.sum(phi_tr_2[c0:c1])
-                D0[i, j] = (np.sum(simpson(L1_inv[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1))
-                            / simpson(self.Phi0[c0:c1], E[c0:c1])).T
-                D2[i, j] = (np.sum(simpson(L3_inv[r0:r1, c0:c1] * self.Phi0[c0:c1], E[c0:c1], axis=1))
-                            / simpson(self.Phi0[c0:c1], E[c0:c1])).T
-        print(f"D_coef Time: {np.round(time.time()-stt,5)} s")
-        if self.save_data == True:
-            with h5py.File(f"{self.save_dir}D_coef_{self.NH}.h5", "w") as f:
-                f.create_dataset("D", data=D,compression="gzip", compression_opts=4)
-                f.create_dataset("D0", data=D0,compression="gzip", compression_opts=4)
-                f.create_dataset("D2", data=D2,compression="gzip", compression_opts=4)
+            # Sum the fine-group responses within coarse exit group i
+            D0[i, :] = np.sum(Y0_mat[r0:r1, :], axis=0) / den_vec
+            D2[i, :] = np.sum(Y2_mat[r0:r1, :], axis=0) / den_vec
 
-        D_norm = D / np.linalg.norm(D)
-        D0_norm = D0 / np.linalg.norm(D0)
-        print(f"L2 norm on phi0 vs Phi0 weighted Diffusion Matrix: {self.L2_norm((D_norm), (D0_norm))}")
+        # conventional coefs
+        sigma_t = self.sig_t_U[:-1] + self.sig_t_H[:-1]
+        B2 = self.B2 if (isinstance(self.B2, (float, int))) else 0
+        D_tr_fine = self.diff_matrix(sigma_t, sig_s1, B2)
+        D2_tr_fine = 9 / (15 * sigma_t)
+        
+        D_conv_0 = np.zeros((N_coarse, N_coarse))
+        D_conv_2 = np.zeros((N_coarse, N_coarse))
+        
+        # Weight conventional D by phi0 (diagonal weight for efficiency)
+        for j in range(N_coarse):
+            c0, c1 = fg_idx[j], fg_idx[j+1]
+            for i in range(N_coarse):
+                r0, r1 = fg_idx[i], fg_idx[i+1]
+                # Weighted sum across incident bins
+                D_conv_0[i, j] = np.sum(D_tr_fine[r0:r1, c0:c1] @ self.phi0[c0:c1]) / np.sum(self.phi0[c0:c1])
+                if i == j: # D2_conv is typically a diagonal approximation
+                    D_conv_2[i, j] = np.sum(D2_tr_fine[c0:c1] * self.phi0[c0:c1]) / np.sum(self.phi0[c0:c1])
 
-        return D, D2_conv, D0, D2
+        print(f"D_coef Time: {time.time()-stt:.3f} s")
+        return D_conv_0, D_conv_2, D0, D2
 
     def mat_grp_constants(self,key):
         if key == 'fuel':
@@ -1048,24 +1002,6 @@ class Sp3:
         #sigma_s3_0_U = np.where(sigma_s3_0_U > 0, sigma_s3_0_U, 0)
         #sigma_s3_2_U = np.where(sigma_s3_2_U > 0, sigma_s3_2_U, 0)
 
-        """
-        # printing
-        for l in range(self.leg_order):
-            print(self.sigma_s_gtg_U[l,0,0])
-        print('\n')
-        print(sigma_s0_U[0,0])
-        print(sigma_s0_0_U[0,0])
-        print(sigma_s1_0_U[0,0])
-        print(sigma_s2_0_U[0,0])
-        print(sigma_s3_0_U[0,0])
-        print('\n')
-        print(sigma_s0_U[0,0])
-        print(sigma_s0_2_U[0,0])
-        print(sigma_s1_2_U[0,0])
-        print(sigma_s2_2_U[0,0])
-        print(sigma_s3_2_U[0,0])
-        """
-
         if self.save_data == True: self.save_sigma_sl(sigma_s0_U, sigma_s0_0_U, sigma_s0_2_U,
                                                         sigma_s1_U, sigma_s1_0_U, sigma_s1_2_U,
                                                         sigma_s2_U, sigma_s2_0_U, sigma_s2_2_U,
@@ -1095,7 +1031,6 @@ class Sp3:
                                                         sigma_s2_H, sigma_s2_0_H, sigma_s2_2_H,
                                                         sigma_s3_H, sigma_s3_0_H, sigma_s3_2_H,
                                                         self.AH,self.save_dir,self.NH)
-
         """
         # Oxygen
         print("Oxygen Group->Group Few Group Cross-Sections")
@@ -1131,13 +1066,15 @@ class Sp3:
 
         # calulate diffusion coefs
         self.D_conv_0, self.D_conv_2, self.D0, self.D2 = self.Dn_coef(self.sigma_s_gtg_U[1,:,:] + self.sigma_s_gtg_H[1,:,:])
+        print(self.D_conv_0)
+        print(self.D0)
         pdf = self.get_percent_diff(self.D_conv_0,self.D0,0)
         pdf = self.get_percent_diff(self.D_conv_2,self.D2,0)
         if verbose: print(f"{pdf:5g}, Diffusion Coef 0")
 
         if self.save_data == True: self.save_Dn(self.D_conv_0,self.D0,self.D2,self.save_dir,key=None)
 
-    def run(self, verbose=False, transport=False, b2_tol=1e-5, max_outer_iters=10):
+    def run(self, verbose=False, transport=False, b2_tol=1e-5, max_outer_iters=20):
         self.initial_flux()
         if self.fromH5 == True: 
             self.read_data()
@@ -1149,7 +1086,7 @@ class Sp3:
             # precompute operators in first step, use downstream
             print("\nPrecomputing constant SP3 operators...")
             
-            # Use GPU if available to do the trillion operations instantaneously
+            # Use GPU if available
             device = "cuda" if torch.cuda.is_available() else "cpu"
             if device == "cuda":
                 t_L0 = torch.from_numpy(self.L0).to("cuda")
@@ -1178,7 +1115,7 @@ class Sp3:
 
             # FUNDAMENTAL MODE SEARCH LOOP
             print("\n--- Starting Fundamental Mode Buckling Search ---")
-            current_B2 = 0.0 # Strict infinite medium start
+            current_B2 = 0.0001 # Strict infinite medium start
             
             #omegas = np.linspace(1.55,1.65,21)
             for outer_iter in range(max_outer_iters):
@@ -1191,14 +1128,9 @@ class Sp3:
                 # LHS
                 LHS = self.L3210 + self.B2 * self.L_B2_term
                 np.fill_diagonal(LHS, LHS.diagonal() + 9 * B4) 
-                # Build RHS
+                # RHS
                 RHS = (self.L321_source + self.B2 * self.L_source_B2) @ self.chi
-                
                 self.phi0 = np.linalg.solve(LHS, RHS)
-                
-                # FLOOR SP3 NEGATIVE TRUNCATION ARTIFACTS
-                #self.phi0[self.phi0 < 0] = 0.0
-                #self.phi0 = self.normalize(self.phi0)
                 
                 # Solve phi2
                 RHS2 = 0.5 * (-9 * self.B2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
@@ -1242,16 +1174,17 @@ class Sp3:
             self.B2_new = new_B2
             self.phi0_sp3_new = fg_phi0
             self.phi2_sp3_new = fg_phi2
+
+            # =====================================================================
             # CONVENTIONAL FUNDAMENTAL MODE SEARCH LOOP
             # =====================================================================
             print("\n--- Starting Conventional Fundamental Mode Buckling Search ---")
-            current_B2_conv = 0.0 # Start fresh for the conventional solver
+            current_B2_conv = 0.0001 # Start fresh for the conventional solver
             
             for outer_iter in range(max_outer_iters):
                 print(f"\nConv Outer Iteration {outer_iter + 1} | Input B2 = {current_B2_conv:5e}")
                 self.B2 = current_B2_conv
                 
-                # 1. Solve slowing down spectrum on fine grid (using current_B2_conv)
                 stt = time.time()
                 B4 = self.B2 * self.B2
                 LHS = self.L3210 + self.B2 * self.L_B2_term
@@ -1263,10 +1196,7 @@ class Sp3:
                 self.phi2 = np.linalg.solve(self.L32, RHS2)
                 self.calc_Phi()
                 
-                # 2. Update few-group constants based on the new conventional spectrum
                 self.upd_grp_constants(verbose=False)
-                
-                # 3. Solve Conventional Eigenvalue
                 new_B2_conv, fg_phi0_conv, fg_phi2_conv = self.B2_eigenvalue_conv(
                     self.Sig_t,
                     self.Sig_s0, self.Sig_s2,
@@ -1275,7 +1205,6 @@ class Sp3:
                     current_B2_conv
                 )
                 
-                # 4. Check Convergence
                 if abs(current_B2_conv) > 0: 
                     err = abs(new_B2_conv - current_B2_conv) / abs(current_B2_conv)
                 else: 
@@ -1302,70 +1231,7 @@ class Sp3:
         # plot and save
         phi0_fg, phi2_fg = self.few_group_fluxes(key=None)
         self.plot_few_grp_sp3_eqns(phi0_fg)
-
-    """
-    def run(self, verbose = False, transport = False):
-        self.initial_flux()
-        if self.fromH5 == True: self.read_data()
-        else:
-            print(f"Starting calculation. Saving Data = {self.save_data}")
-            print(f'Build Sigma_gtg and Ln for Uranium, NU = {self.NU}')
-            self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U,self.sigma_fr_U, verbose)
-            print(f'Build Sigma_gtg and Ln for Hydrogen, NH = {self.NH}')
-            self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H,self.sigma_fr_H, verbose)
-            #print(f'Build Sigma_gtg and Ln for Oxygen, NO = {self.NO}')
-            #self.calc_Ln(self.AO, self.sig_t_O, self.sig_s0_O,verbose)
-            if verbose: self.save_Ln()
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            if isinstance(self.B2, float) or isinstance(self.B2, int):  
-                if device == "cuda": self.calc_phi_torch()
-                else: self.calc_phi()
-            else: self.calc_phi_B2()
-            self.calc_Phi()
-            self.plot_fluxes()
-            assert np.all(self.phi0 > 0), "phi0 must be positive"
-            if verbose:
-                self.plot_flux_diff_single_axis()
-                self.plot_flux_diff()
-            if self.save_data == True: self.save_fluxes()
-            #self.mat_grp_constants("fuel")
-            self.upd_grp_constants(verbose)
-
-        # few group fluxes
-        phi0_fg, phi2_fg = self.few_group_fluxes(key=None)
-        print("Comparing FG Constants")
-        self.B2_conv, self.phi0_sp3_conv, self.phi2_sp3_conv = self.B2_eigenvalue_conv(
-                                                                self.Sig_t, 
-                                                                self.Sig_s0, self.Sig_s2, 
-                                                                self.Chi, self.Sig_f, 
-                                                                self.D_conv_0, self.D_conv_2,)
-        
-        self.B2 = self.B2_conv
-        self.calc_phi()
-        self.plot_fluxes()
-        self.calc_Phi()
-        self.upd_grp_constants()
-
-        self.B2_new, self.phi0_sp3_new, self.phi2_sp3_new = self.B2_eigenvalue_new(self.D0, self.D2, 
-                                                                self.Sig_t_0, self.Sig_t_2,
-                                                                self.Sig_s0_0, self.Sig_s0_2, self.Sig_s2_2,
-                                                                self.Chi, self.Sig_f_0, self.Sig_f_2, self.B2)
-        print("New")
-        print(self.phi0_sp3_new)
-        print(self.phi2_sp3_new)
-
-        print("Conv")
-        print(self.phi0_sp3_conv)
-        print(self.phi2_sp3_conv)
-
-        print("Few Group")
-        print(phi0_fg)
-        print(phi2_fg)
-        
-        self.plot_few_grp_sp3_eqns(phi0_fg)
         # --- End of Run --- #
-    """
 
     # ----- Reading Data, Plotting and Saving----- #
     def save_Ln(self):
@@ -1551,7 +1417,6 @@ class Sp3:
         fg_idx = np.zeros(self.few_groups + 1, dtype=int)
         for i, target_E in enumerate(self.custom_bounds):
             fg_idx[i] = np.argmin(np.abs(self.Evec - target_E))
-        #fg_idx = np.linspace(0,self.phi0.size,self.few_groups+1, dtype=int)
 
         plot_density_Phi0 = np.zeros(self.few_groups)
         for i in range(few_grp_Phi0.size):
@@ -1568,7 +1433,6 @@ class Sp3:
             # If we cross the index threshold into the next custom group, increment index
             if i >= fg_idx[index+1] and index < self.few_groups - 1:
                 index += 1
-            #Phi_plot[i] = few_grp_Phi0[index]
             Phi_plot[i] = plot_density_Phi0[index]
 
         plt.figure()
@@ -1585,14 +1449,6 @@ class Sp3:
         return few_grp_Phi0, few_grp_Phi2
 
     def plot_few_grp_sp3_eqns(self,phi0_fg):
-        if verbose:
-            print(self.B2_conv)
-            print(self.phi0_sp3_conv)
-            print(self.phi2_sp3_conv)
-            print(self.B2_new)
-            print(self.phi0_sp3_new)
-            print(self.phi2_sp3_new)
-
         # plot and compare
         Efg = np.exp(np.linspace(np.log(self.Emin),np.log(self.E0),self.few_groups+1))
         Efg = np.flip(Efg)
@@ -1942,10 +1798,8 @@ class Sp3:
             B2_old = B2
             Phi0_old = Phi0.copy()
             Phi2_old = Phi2.copy()
-            # 1. Fission Source (Constant during this spatial step)
             Q_fiss = Fiss @ (Phi0_old - 2 * Phi2_old)
 
-            # 2. Dynamic Buckling Shift (Guarantees Positive LHS Diagonal!)
             if B2 >= 0:
                 lhs0 = D0 * B2 + R0
                 rhs0 = Q_fiss + 2 * R0 @ Phi2_old
@@ -1963,85 +1817,29 @@ class Sp3:
                 rhs2 = 2 * R0 @ Phi0 - 2 * Q_fiss - (D2 * B2) @ Phi2_old
                 Phi2 = np.linalg.solve(lhs2, rhs2)
 
-            # 3. Normalize Fluxes to physical scalar sum
             norm = np.sum(Phi0 - 2 * Phi2)
             #norm = np.sum(Phi0)
             Phi0 /= norm
             Phi2 /= norm
 
-            # 4. Exact Algebraic B2 Update
             # Top Eqn is: D0 * B2 * Phi0 = Q_fiss + 2 * R0 * Phi2 - R0 * Phi0
             RHS_sum = np.sum(Q_fiss + 2 * R0 @ Phi2 - R0 @ Phi0)
             LHS_sum = np.sum(D0 @ Phi0)
 
+            #print("WARNING ONLY RETURNING THE FIRST ITERATION")
+            #return B2, Phi0 - 2 * Phi2, Phi2
             B2_target = RHS_sum / LHS_sum
             B2 = B2_old + omega * (B2_target - B2_old)
 
-            # 5. Convergence Check
             err = abs(B2 - B2_old) / abs(B2_old) if abs(B2_old) > 0 else abs(B2)
             if err < tol and k > 5:
                 print(f"Converged B2_conv: {B2:5e} in {k+1} iters")
                 return B2, Phi0 - 2 * Phi2, Phi2
 
-            if (k % 20 == 0): print(f"Iter {k+1}: B2 = {B2:5g}, Res = {err:5g}")
+            if (k % 25 == 0): print(f"Iter {k+1}: B2 = {B2:5g}, Res = {err:5g}")
 
         print("Warning: B2_conv did not converge!")
         return B2, Phi0 - 2 * Phi2, Phi2
-
-#            # Update Flux Shapes (Linear Solve with current B2)
-#            # Top Eqn
-#            lhs0 = D0 * B2 + Sig_a
-#            rhs0 = Fiss @ (Phi0_old - 2 * Phi2_old) + 2 * Sig_a @ Phi2_old
-#            Phi0 = np.linalg.solve(lhs0, rhs0)
-#
-#            # Bot Eqn
-#            lhs2 = D2 * B2 + Sig_r2 + 4 * Sig_a
-#            rhs2 = 2 * Sig_a @ Phi0_old - 2 * Fiss @ (Phi0_old - 2 * Phi2_old)
-#            Phi2 = np.linalg.solve(lhs2, rhs2)
-#
-#            # Build vectors
-#            x_vec = np.concatenate([Phi0, Phi2])
-#
-#            Ax_vec = np.concatenate([
-#                Fiss @ (Phi0 - 2 * Phi2) + 2 * Sig_a @ Phi2,
-#                2 * Sig_a @ Phi0 - 2 * Fiss @ (Phi0 - 2 * Phi2)
-#            ])
-#            
-#            Cx_vec = np.concatenate([
-#                D0 @ Phi0,
-#                D2 @ Phi2
-#            ])
-#
-#            # Rayleigh quotient
-#            B2_new = (x_vec @ Ax_vec) / (x_vec @ Cx_vec)
-#            
-#            # Relaxation (optional but smart)
-#            B2 = B2 + omega * (B2_new - B2)
-#            # Normalize to prevent magnitude drift
-#            #norm = np.sum(Phi0)
-#            #Phi0 /= norm
-#            #Phi2 /= norm
-#
-#            # Calculate New B2 
-#            # Total Production: Fission on (Phi0 - 2*Phi2)
-#            #production = np.sum(Fiss @ (Phi0 - 2 * Phi2))
-#            # Total Absorption/Loss: Sig_a on (Phi0 - 2*Phi2)
-#            #absorption = np.sum(Sig_a @ (Phi0 - 2 * Phi2))
-#            #net_production = production - absorption
-#            #leakage_weight = np.sum(D0 @ Phi0)
-#            #B2_target = net_production / leakage_weight
-#            #B2 = B2 + omega * (B2_target - B2)
-#
-#            # Convergence Check on B2
-#            L2_B2 = abs(B2 - B2_old) / (abs(B2_old))
-#            if L2_B2 < tol:
-#                t = time.time() - stt
-#                print(f"Converged B2: {B2:8g} in {k+1} iters and {t:5e} seconds")
-#                return B2, Phi0, Phi2
-#            if (k % 20 == 0) : print(f"Iter {k+1}: B2 = {B2:5g}, Res = {L2_B2:5g}")
-#
-#        print("Not Converged, Increase number of iterations")
-#        return B2, Phi0, Phi2
 
     @staticmethod
     def B2_eigenvalue_new(D0, D2, Sig_t_0, Sig_t_2, Sig_s0_0, Sig_s0_2, Sig_s2_2, chi, nuSigf0, nuSigf2, B2_guess=-1e-4, max_iters=5000, tol=1e-8, omega=1.2, boost=1):
@@ -2090,90 +1888,23 @@ class Sp3:
             Phi0 /= norm
             Phi2 /= norm
 
-            # 4. Exact Algebraic B2 Update
-            # Top Eqn is: D0 * B2 * Phi0 = Q_fiss + 2 * R2_new * Phi2 - R0 * Phi0
             RHS_sum = np.sum(Q_fiss + 2 * R2_new @ Phi2 - R0 @ Phi0)
             LHS_sum = np.sum(D0 @ Phi0)
 
+            #print("WARNING ONLY RETURNING THE FIRST ITERATION")
+            #return B2, Phi0 - 2 * Phi2, Phi2
             B2_target = RHS_sum / LHS_sum
             B2 = B2_old + omega * (B2_target - B2_old)
 
-            # 5. Convergence Check
             err = abs(B2 - B2_old) / abs(B2_old) if abs(B2_old) > 0 else abs(B2)
             if err < tol and k > 5:
                 print(f"Converged B2_new: {B2:5e} in {k+1} iters")
                 return B2, Phi0 - 2 * Phi2, Phi2
 
-            if (k % 20 == 0): print(f"Iter {k+1}: B2 = {B2:5g}, Res = {err:5g}")
+            if (k % 25 == 0): print(f"Iter {k+1}: B2 = {B2:5g}, Res = {err:5g}")
 
         print("Warning: B2_new did not converge!")
         return B2, Phi0 - 2 * Phi2, Phi2
-    """
-    @staticmethod
-    def B2_eigenvalue_new(D0, D2, Sig_t_0, Sig_t_2,
-                      Sig_s0_0, Sig_s0_2, Sig_s2_2,
-                      chi, nuSigf0, nuSigf2,
-                      B2_guess = 1e-4,
-                      max_iters=5000, tol=1e-8, omega = .1, boost = 1):
-        print("B2 Eigenvalue New")
-        G = chi.size
-        chi = chi / (chi.sum())
-        D0 *= boost
-        D2 *= boost
-
-        Phi0 = np.ones(G)
-        Phi2 = np.ones(G)
-        B2 = B2_guess
-    
-        # Pre-calculate consistent operators
-        Sig_T0 = np.diag(Sig_t_0)
-        Sig_T2 = np.diag(Sig_t_2)
-        Fiss0 = np.outer(chi, nuSigf0)
-        Fiss2 = np.outer(chi, nuSigf2)
-        
-        stt = time.time()
-        for k in range(max_iters):
-            B2_old = B2
-            Phi0_old = copy.copy(Phi0)
-            Phi2_old = copy.copy(Phi2)
-
-            lhs_0 = (D0 * B2) + (Sig_T0 - Sig_s0_0)
-            #lhs_0 = (D0 * B2) + (Sig_T0 - Sig_s0_0.T)
-            rhs_0 = (Fiss0 @ Phi0_old - 2 * Fiss2 @ Phi2_old) + 2 * (Sig_T2 - Sig_s0_2) @ Phi2_old
-            #rhs_0 = (Fiss0 @ Phi0_old - 2 * Fiss2 @ Phi2_old) + 2 * (Sig_T2 - Sig_s0_2.T) @ Phi2_old
-            Phi0 = np.linalg.solve(lhs_0, rhs_0)
-
-            lhs_2 = (D2 * B2) + (Sig_T2 - Sig_s2_2) + 4 * (Sig_T2 - Sig_s0_2)
-            #lhs_2 = (D2 * B2) + (Sig_T2 - Sig_s2_2.T) + 4 * (Sig_T2 - Sig_s0_2.T)
-            rhs_2 = 2 * (Sig_T0 - Sig_s0_0) @ Phi0 - 2 * (Fiss0 @ Phi0_old - 2 * Fiss2 @ Phi2_old)
-            #rhs_2 = 2 * (Sig_T0 - Sig_s0_0.T) @ Phi0 - 2 * (Fiss0 @ Phi0_old - 2 * Fiss2 @ Phi2_old)
-            Phi2 = np.linalg.solve(lhs_2, rhs_2)
-
-            norm = np.sum(Phi0 - 2 * Phi2)
-            Phi0 /= norm
-            Phi2 /= norm
-
-            production = np.sum(Fiss0 @ Phi0 - 2 * Fiss2 @ Phi2)
-            absorption = np.sum((Sig_T0 - Sig_s0_0.T) @ Phi0)
-            sp3_corr = 2 * np.sum((Sig_T2 - Sig_s0_2.T) @ Phi2)
-
-            leakage_weight = np.sum(D0 @ Phi0)
-            B2_target = (production - absorption + sp3_corr) / leakage_weight
-            B2 = B2 + omega * (B2_target - B2)
-
-            # --- Convergence Check ---
-            L2_B2 = abs(B2 - B2_old) / (abs(B2_old))
-            if L2_B2 < tol:
-                t = time.time() - stt
-                print(f"Converged B2: {B2:8g} in {k+1} iters and {t:5e} seconds")
-                return B2, Phi0 - 2 * Phi2, Phi2
-                
-            if (k % 20 == 0) : print(f"Iter {k+1}: B2 = {B2:5g}, Res = {L2_B2:5g}")
-            #print(f"Iter {k+1}: B2 = {B2:5g}, Res = {L2_B2:5g}")
-    
-        print("Not Converged, Increase number of iterations")
-        return B2, Phi0 - 2 * Phi2, Phi2
-    """
 
     @staticmethod
     def normalize(vec):
@@ -2202,7 +1933,7 @@ stt = time.time()
 NH = .10
 xs_tol = 5 # percent
 B2 = 0.0
-nbins = 9000
+nbins = 10000
 #B2 = np.linspace(-.0011,.0011,6)
 #few_groups = 8
 fromH5 = False
