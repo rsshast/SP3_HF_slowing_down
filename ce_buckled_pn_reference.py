@@ -15,24 +15,10 @@ search can also find the critical B2 for which k(B2) = 1.
 
 from __future__ import annotations
 
-import argparse
-import csv
-import inspect
-import json
-import math
-import os
-import tracemalloc
-from pathlib import Path
-from typing import Iterable
-
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy.sparse.linalg import LinearOperator, bicgstab, gmres, lgmres
-
-import ce_buckled_transport_reference as snref
+from input import *
 
 
-def multiplication_matrix(order: int) -> np.ndarray:
+def multiplication_matrix(order):
     """Return the PN moment matrix for multiplication by mu."""
     L = order + 1
     mat = np.zeros((L, L), dtype=float)
@@ -45,17 +31,17 @@ def multiplication_matrix(order: int) -> np.ndarray:
 
 
 class BuckledPNReference:
-    def __init__(self, data: snref.MaterialData, pn_order: int):
+    def __init__(self, data, pn_order):
         if pn_order < 0:
             raise ValueError("pn_order must be nonnegative.")
         self.data = data
         self.pn_order = pn_order
         self.moment_count = pn_order + 1
         self.mu_matrix = multiplication_matrix(pn_order)
-        self.last_moments: np.ndarray | None = None
-        self.last_b2: float | None = None
+        self.last_moments = None
+        self.last_b2 = None
 
-    def negative_b2_floor(self, safety: float) -> float:
+    def negative_b2_floor(self, safety):
         eigs = np.linalg.eigvals(self.mu_matrix)
         max_positive_mu = float(np.max(np.real(eigs)))
         if max_positive_mu <= 0.0:
@@ -63,20 +49,20 @@ class BuckledPNReference:
         beta_limit = float(np.min(self.data.sigma_t)) / max_positive_mu
         return -(safety * beta_limit) ** 2
 
-    def _streaming_factor(self, b2: float) -> complex:
+    def _streaming_factor(self, b2):
         return 1j * np.sqrt(np.complex128(b2))
 
-    def _scatter_apply(self, moments: np.ndarray) -> np.ndarray:
+    def _scatter_apply(self, moments):
         out = np.zeros_like(moments)
         scatter_count = min(self.data.scatter.shape[0], self.moment_count)
         for ell in range(scatter_count):
             out[ell] = self.data.scatter[ell] @ moments[ell]
         return out
 
-    def matvec_for_b2(self, b2: float):
+    def matvec_for_b2(self, b2):
         streaming = self._streaming_factor(b2)
 
-        def matvec(vec: np.ndarray) -> np.ndarray:
+        def matvec(vec):
             moments = vec.reshape(self.moment_count, self.data.sigma_t.size)
             out = self.data.sigma_t[None, :] * moments - self._scatter_apply(moments)
             out += streaming * (self.mu_matrix @ moments)
@@ -84,7 +70,7 @@ class BuckledPNReference:
 
         return matvec
 
-    def local_preconditioner(self, b2: float) -> LinearOperator:
+    def local_preconditioner(self, b2):
         G = self.data.sigma_t.size
         L = self.moment_count
         streaming = self._streaming_factor(b2)
@@ -96,44 +82,26 @@ class BuckledPNReference:
                 if ell < self.data.scatter.shape[0]:
                     blocks[g, ell, ell] -= self.data.scatter[ell, g, g]
 
-        def apply(vec: np.ndarray) -> np.ndarray:
+        def apply(vec):
             rhs = vec.reshape(L, G).T
             solved = np.linalg.solve(blocks, rhs)
             return solved.T.ravel()
 
         return LinearOperator((L * G, L * G), matvec=apply, dtype=np.complex128)
 
-    def solve_fixed_source(
-        self,
-        b2: float,
-        tol: float,
-        max_iters: int,
-        gmres_restart: int,
-        linear_solver: str,
-        verbose: bool,
-    ) -> tuple[float, np.ndarray, int, float]:
-        snref.report_memory(f"before PN fixed-source solve B2={b2:.8e}")
+    def solve_fixed_source(self, b2, tol, max_iters, gmres_restart, linear_solver, verbose):
+        report_memory(f"before PN fixed-source solve B2={b2:.8e}")
         shape = (self.moment_count, self.data.sigma_t.size)
         rhs_moments = np.zeros(shape, dtype=np.complex128)
         rhs_moments[0] = self.data.chi
         rhs = rhs_moments.ravel()
         x0 = self.last_moments.ravel() if self.last_moments is not None and self.last_moments.shape == shape else rhs.copy()
 
-        for name, arr in (
-            ("sigma_t", self.data.sigma_t),
-            ("scatter", self.data.scatter),
-            ("nu_sigma_f", self.data.nu_sigma_f),
-            ("chi", self.data.chi),
-            ("rhs", rhs_moments),
-        ):
-            if not np.all(np.isfinite(arr)):
-                raise FloatingPointError(f"{name} contains NaN or inf before the B2={b2:g} PN solve.")
-
         matvec = self.matvec_for_b2(b2)
         op = LinearOperator((rhs.size, rhs.size), matvec=matvec, dtype=np.complex128)
         preconditioner = self.local_preconditioner(b2)
-        snref.report_memory(f"after PN preconditioner B2={b2:.8e}")
-        residuals: list[float] = []
+        report_memory(f"after PN preconditioner B2={b2:.8e}")
+        residuals = []
 
         def callback(residual_norm):
             if np.isscalar(residual_norm):
@@ -143,7 +111,7 @@ class BuckledPNReference:
             if verbose and (len(residuals) == 1 or len(residuals) % 25 == 0):
                 print(f"  {linear_solver} iter {len(residuals):5d}: callback={residuals[-1]:.4e}")
 
-        def add_tolerance_kwargs(kwargs: dict, solver_fn) -> dict:
+        def add_tolerance_kwargs(kwargs, solver_fn):
             params = inspect.signature(solver_fn).parameters
             if "rtol" in params:
                 kwargs["rtol"] = tol
@@ -188,7 +156,7 @@ class BuckledPNReference:
             sol, info = bicgstab(op, rhs, **solve_kwargs)
         else:
             raise ValueError(f"Unknown linear solver: {linear_solver}")
-        snref.report_memory(f"after PN {linear_solver} B2={b2:.8e}")
+        report_memory(f"after PN {linear_solver} B2={b2:.8e}")
 
         moments = sol.reshape(shape)
         residual_vec = matvec(sol) - rhs
@@ -202,7 +170,7 @@ class BuckledPNReference:
         k = np.dot(self.data.nu_sigma_f, moments[0]).real
         return float(k), moments, iters, err
 
-    def k_of_b2(self, b2: float, args: argparse.Namespace) -> tuple[float, np.ndarray]:
+    def k_of_b2(self, b2, args):
         k, moments, iters, err = self.solve_fixed_source(
             b2=b2,
             tol=args.inner_tol,
@@ -214,7 +182,7 @@ class BuckledPNReference:
         print(f"PN{self.pn_order} B2={b2:.8e}, k={k:.10e}, fixed-source iters={iters}, residual={err:.3e}")
         return k, moments
 
-    def find_critical_b2(self, args: argparse.Namespace) -> tuple[float, float, np.ndarray]:
+    def find_critical_b2(self, args):
         negative_floor = self.negative_b2_floor(args.negative_b2_safety)
         print(
             f"Negative-B2 PN floor = {negative_floor:.8e} "
@@ -282,14 +250,14 @@ class BuckledPNReference:
 
 
 def write_outputs(
-    outdir: Path,
-    b2: float,
-    k: float,
-    data: snref.MaterialData,
-    moments: np.ndarray,
-    collapsed: dict[str, np.ndarray],
-    args: argparse.Namespace,
-) -> None:
+    outdir,
+    b2,
+    k,
+    data,
+    moments,
+    collapsed,
+    args,
+):
     outdir.mkdir(parents=True, exist_ok=True)
     npz_path = outdir / "ce_buckled_pn_reference.npz"
     np.savez_compressed(
@@ -337,7 +305,7 @@ def write_outputs(
         "initial_B2": args.initial_b2,
         "fixed_B2": args.fixed_b2,
         "negative_b2_safety": args.negative_b2_safety,
-        "memory_profile": snref.MEMORY_PROFILE,
+        "memory_profile": args.memory_profile and not args.no_memory_profile,
         "note": "Scattering moments above scatter_legendre_order are treated as zero in the PN solve.",
     }
     (outdir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -387,85 +355,14 @@ def write_outputs(
     print(f"Wrote PN reference npz to {npz_path}")
 
 
-def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--data-dir", default="data")
-    p.add_argument("--group-structure", default=os.getenv("CE_GROUP_STRUCTURE", "wims69.txt"))
-    p.add_argument("--outdir", default=os.getenv("PN_OUTDIR", "results/ce_pn_reference"))
-    p.add_argument("--fine-groups", type=int, default=int(os.getenv("CE_FINE_GROUPS", "12000")))
-    p.add_argument("--pn-order", type=int, default=int(os.getenv("PN_ORDER", "3")), help="Highest PN order N. Moment count is N+1.")
-    p.add_argument(
-        "--scatter-legendre-order",
-        type=int,
-        default=int(os.getenv("PN_SCATTER_LEGENDRE_ORDER", "4")),
-        help="Number of scattering Legendre moments to generate. Current thermal kernel supports 1..4. Default: 4.",
-    )
-    p.add_argument("--NH", type=float, default=float(os.getenv("SP3_NH", "0.10")))
-    p.add_argument("--NU", type=float, default=float(os.getenv("SP3_NU", "0.02")))
-    p.add_argument("--nu", type=float, default=float(os.getenv("SP3_NU_BAR", "2.43")))
-    p.add_argument("--e0", type=float, default=None)
-    p.add_argument("--emin", type=float, default=None)
-    p.add_argument("--kT", type=float, default=8.617e-5 * 293.15)
-    p.add_argument("--kernel-quad", type=int, default=64)
-    p.add_argument("--no-upscatter", action="store_true")
-    p.add_argument(
-        "--thermal-upscatter-nuclides",
-        default=os.getenv("CE_THERMAL_UPSCATTER_NUCLIDES", "H,U"),
-        help="Comma-separated nuclides that receive thermal upscatter replacement. Supported: H, U. Default: H,U.",
-    )
-    p.add_argument(
-        "--thermal-upscatter-cutoff-ev",
-        type=float,
-        default=float(os.getenv("CE_THERMAL_UPSCATTER_CUTOFF_EV", "4.0")),
-        help="Incident and exit energy cutoff for thermal upscatter replacement. Default: 4 eV.",
-    )
-    p.add_argument(
-        "--p0-only-upscatter",
-        action=argparse.BooleanOptionalAction,
-        default=os.getenv("CE_P0_ONLY_UPSCATTER", "true").lower() == "true",
-        help="Apply thermal upscatter replacement only to P0, leaving higher-L downscatter moments. Default: true.",
-    )
-    p.add_argument("--diagnostics", action="store_true", help="Print input and scattering-matrix diagnostics.")
-    p.add_argument("--no-scatter-validation", action="store_true", help="Allow nonphysical scattering matrices for debugging.")
-    p.add_argument(
-        "--max-legendre-ratio",
-        type=float,
-        default=float(os.getenv("CE_MAX_LEGENDRE_RATIO", "inf")),
-        help="Optional failure threshold for |Sigma_sl|/|Sigma_s0|. Default: disabled.",
-    )
-    p.add_argument("--inner-tol", type=float, default=float(os.getenv("PN_INNER_TOL", os.getenv("CE_INNER_TOL", "1e-8"))))
-    p.add_argument("--inner-max-iters", type=int, default=int(os.getenv("PN_INNER_MAX_ITERS", os.getenv("CE_INNER_MAX_ITERS", "5000"))))
-    p.add_argument("--gmres-restart", type=int, default=int(os.getenv("PN_GMRES_RESTART", os.getenv("CE_GMRES_RESTART", "80"))))
-    p.add_argument(
-        "--linear-solver",
-        choices=("lgmres", "bicgstab", "gmres"),
-        default=os.getenv("PN_LINEAR_SOLVER", os.getenv("CE_LINEAR_SOLVER", "lgmres")),
-        help="Krylov method for the PN fixed-source solve. Default: lgmres.",
-    )
-    p.add_argument("--initial-b2", type=float, default=float(os.getenv("PN_INITIAL_B2", os.getenv("CE_INITIAL_B2", "-0.01"))))
-    p.add_argument("--fixed-b2", type=float, default=None, help="Skip B2 search and solve PN at this B2.")
-    p.add_argument("--initial-b2-step", type=float, default=float(os.getenv("PN_INITIAL_B2_STEP", os.getenv("CE_INITIAL_B2_STEP", "0.01"))))
-    p.add_argument("--max-abs-b2", type=float, default=float(os.getenv("PN_MAX_ABS_B2", os.getenv("CE_MAX_ABS_B2", "1.0"))))
-    p.add_argument(
-        "--negative-b2-safety",
-        type=float,
-        default=float(os.getenv("PN_NEGATIVE_B2_SAFETY", os.getenv("CE_NEGATIVE_B2_SAFETY", "0.98"))),
-        help="Fraction of the negative-buckling local PN streaming-pole limit allowed during B2 search. Default: 0.98.",
-    )
-    p.add_argument("--b2-k-tol", type=float, default=float(os.getenv("PN_B2_K_TOL", os.getenv("CE_B2_K_TOL", "1e-6"))))
-    p.add_argument("--b2-abs-tol", type=float, default=float(os.getenv("PN_B2_ABS_TOL", os.getenv("CE_B2_ABS_TOL", "1e-8"))))
-    p.add_argument("--b2-max-iters", type=int, default=int(os.getenv("PN_B2_MAX_ITERS", os.getenv("CE_B2_MAX_ITERS", "80"))))
-    p.add_argument("--verbose-inner", action="store_true")
-    p.add_argument("--no-memory-profile", action="store_true", help="Disable memory usage reports.")
-    return p.parse_args(argv)
+def parse_args(argv=None):
+    return pn_args()
 
 
-def main(argv: Iterable[str] | None = None) -> None:
+def main(argv=None):
     args = parse_args(argv)
-    snref.MEMORY_PROFILE = not args.no_memory_profile
-    if snref.MEMORY_PROFILE and not tracemalloc.is_tracing():
-        tracemalloc.start()
-    snref.report_memory("startup")
+    set_memory_profile(args.memory_profile and not args.no_memory_profile)
+    report_memory("startup")
 
     if args.pn_order < 0:
         raise ValueError("--pn-order must be nonnegative.")
@@ -473,8 +370,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         raise ValueError("--scatter-legendre-order must be between 1 and 4 for the current scattering kernel.")
 
     args.legendre_order = args.scatter_legendre_order
-    data = snref.load_problem(args)
-    snref.report_memory("after load_problem")
+    data = load_problem(args, reuse_sn=True)
+    report_memory("after load_problem")
     solver = BuckledPNReference(data, args.pn_order)
     if args.fixed_b2 is None:
         b2, k, moments = solver.find_critical_b2(args)
@@ -484,11 +381,11 @@ def main(argv: Iterable[str] | None = None) -> None:
             raise ValueError(f"--fixed-b2={args.fixed_b2:g} is below the nonsingular PN negative-B2 floor {floor:g}.")
         b2 = args.fixed_b2
         k, moments = solver.k_of_b2(b2, args)
-    snref.report_memory("after PN solve")
-    collapsed = snref.collapse_results(data, moments)
-    snref.report_memory("after few-group collapse")
+    report_memory("after PN solve")
+    collapsed = collapse_results(data, moments)
+    report_memory("after few-group collapse")
     write_outputs(Path(args.outdir), b2, k, data, moments, collapsed, args)
-    snref.report_memory("after writing outputs")
+    report_memory("after writing outputs")
     print(f"PN order     = {args.pn_order}")
     print(f"Critical B2  = {b2:.12e}")
     print(f"k(B2)       = {k:.12e}")

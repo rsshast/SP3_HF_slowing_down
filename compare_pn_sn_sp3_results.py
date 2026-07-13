@@ -8,26 +8,20 @@ plots and CSV/JSON metric summaries.
 
 from __future__ import annotations
 
-import argparse
-import csv
-import json
-from pathlib import Path
-
-import matplotlib.pyplot as plt
-import numpy as np
+from input import *
 
 
-def real_array(data, key: str) -> np.ndarray:
+def real_array(data, key):
     return np.real_if_close(data[key]).real
 
 
-def scalar_float(data, key: str, default=np.nan) -> float:
+def scalar_float(data, key, default=np.nan):
     if key not in data.files:
         return float(default)
     return float(np.real_if_close(data[key]).real)
 
 
-def reference_label(data, fallback: str) -> str:
+def reference_label(data, fallback):
     if "reference_type" in data.files:
         raw = data["reference_type"]
         ref_type = str(raw.item() if getattr(raw, "shape", ()) == () else raw).upper()
@@ -39,13 +33,13 @@ def reference_label(data, fallback: str) -> str:
     return fallback
 
 
-def group_integral_phi(data, key: str = "coarse_phi0") -> np.ndarray:
+def group_integral_phi(data, key="coarse_phi0"):
     if key in data.files:
         return real_array(data, key)
     raise KeyError(f"{key} is not present in {data.files}")
 
 
-def normalized_density_from_integral(phi: np.ndarray, widths: np.ndarray) -> np.ndarray:
+def normalized_density_from_integral(phi, widths):
     phi = np.real_if_close(phi).real
     total = np.sum(phi)
     if abs(total) > 1e-300:
@@ -53,7 +47,7 @@ def normalized_density_from_integral(phi: np.ndarray, widths: np.ndarray) -> np.
     return phi / widths
 
 
-def normalized_l2(candidate: np.ndarray, reference: np.ndarray) -> float:
+def normalized_l2(candidate, reference):
     candidate = np.real_if_close(candidate).real.ravel()
     reference = np.real_if_close(reference).real.ravel()
     csum = np.sum(candidate)
@@ -63,7 +57,7 @@ def normalized_l2(candidate: np.ndarray, reference: np.ndarray) -> float:
     return float(np.linalg.norm(candidate / csum - reference / rsum))
 
 
-def relative_l2(candidate: np.ndarray, reference: np.ndarray) -> float:
+def relative_l2(candidate, reference):
     candidate = np.real_if_close(candidate).real.ravel()
     reference = np.real_if_close(reference).real.ravel()
     denom = np.linalg.norm(reference)
@@ -72,7 +66,7 @@ def relative_l2(candidate: np.ndarray, reference: np.ndarray) -> float:
     return float(np.linalg.norm(candidate - reference) / denom)
 
 
-def max_abs_rel(candidate: np.ndarray, reference: np.ndarray) -> float:
+def max_abs_rel(candidate, reference):
     candidate = np.real_if_close(candidate).real.ravel()
     reference = np.real_if_close(reference).real.ravel()
     denom = np.maximum(np.abs(reference), 1e-300)
@@ -115,16 +109,7 @@ def add_metric(rows, quantity, candidate_name, reference_name, candidate, refere
     )
 
 
-def fine_to_coarse_indices(e_mid: np.ndarray, group_edges_e: np.ndarray) -> list[np.ndarray]:
-    groups = []
-    for i in range(group_edges_e.size - 1):
-        hi = group_edges_e[i]
-        lo = group_edges_e[i + 1]
-        groups.append(np.where((e_mid <= hi) & (e_mid >= lo))[0])
-    return groups
-
-
-def coarse_reference_moment(data, ell: int) -> tuple[np.ndarray, str]:
+def coarse_reference_moment(data, ell):
     coarse_key = f"coarse_phi{ell}"
     if coarse_key in data.files:
         return real_array(data, coarse_key), coarse_key
@@ -189,7 +174,7 @@ def load_npz(path: str | None):
     return p, np.load(p)
 
 
-def plot_spectra(outdir: Path, refs: list[dict], sp3: dict | None):
+def plot_spectra(outdir, refs, sp3):
     plt.figure(figsize=(9.5, 5.8))
     for ref in refs:
         data = ref["data"]
@@ -199,15 +184,16 @@ def plot_spectra(outdir: Path, refs: list[dict], sp3: dict | None):
         dens = normalized_density_from_integral(phi, du)
         x = edges[::-1]
         y = dens[::-1]
-        plt.step(x, np.r_[y, y[-1]], where="post", label=f"{ref['label']}, k={scalar_float(data, 'k_at_B2'):.6g}")
+        plt.step(x, np.r_[y, y[-1]], where="post", label=f"{ref['label']}", linestyle='dotted')
+        #plt.step(x, np.r_[y, y[-1]], where="post", label=f"{ref['label']}, k={scalar_float(data, 'k_at_B2'):.6g}", linestyle='dotted')
 
     if sp3 is not None:
         data = sp3["data"]
         edges = real_array(data, "group_edges_e")
         du = real_array(data, "coarse_du")
-        for key, label, color in (
-            ("phi0_new", "new SP3", None),
-            ("phi0_trad", "traditional SP3", None),
+        for key, label, color, linestyle in (
+            ("phi0_new", "new SP3", None, 'solid'),
+            ("phi0_trad", "traditional SP3", None, 'dashed'),
         ):
             if key not in data.files:
                 continue
@@ -215,7 +201,8 @@ def plot_spectra(outdir: Path, refs: list[dict], sp3: dict | None):
             x = edges[::-1]
             y = dens[::-1]
             k_key = "k_new" if key == "phi0_new" else "k_trad"
-            plt.step(x, np.r_[y, y[-1]], where="post", label=f"{label}, k={scalar_float(data, k_key):.6g}", color=color)
+            plt.step(x, np.r_[y, y[-1]], where="post", label=f"{label}", color=color,linestyle=linestyle)
+            #plt.step(x, np.r_[y, y[-1]], where="post", label=f"{label}, k={scalar_float(data, k_key):.6g}", color=color,linestyle=linestyle)
 
     plt.xscale("log")
     plt.xlabel("Energy (eV)")
@@ -227,8 +214,8 @@ def plot_spectra(outdir: Path, refs: list[dict], sp3: dict | None):
     plt.close()
 
 
-def build_metrics(refs: list[dict], sp3: dict | None) -> list[dict]:
-    rows: list[dict] = []
+def build_metrics(refs, sp3):
+    rows = []
 
     if len(refs) >= 2:
         base = refs[0]
@@ -333,7 +320,7 @@ def build_metrics(refs: list[dict], sp3: dict | None) -> list[dict]:
     return rows
 
 
-def write_k_summary(outdir: Path, refs: list[dict], sp3: dict | None):
+def write_k_summary(outdir, refs, sp3):
     rows = []
     for ref in refs:
         rows.append({"case": ref["label"], "B2": scalar_float(ref["data"], "B2"), "k": scalar_float(ref["data"], "k_at_B2"), "file": str(ref["path"])})
@@ -349,13 +336,7 @@ def write_k_summary(outdir: Path, refs: list[dict], sp3: dict | None):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--sn-npz", default=None, help="SN reference npz, usually ce_buckled_transport_reference.npz.")
-    p.add_argument("--pn-npz", action="append", default=[], help="PN reference npz. May be passed more than once.")
-    p.add_argument("--sp3-npz", default=None, help="SP3 result npz, usually sp3_results.npz.")
-    p.add_argument("--outdir", default="results/pn_sn_sp3_comparison")
-    p.add_argument("--reference", choices=("sn", "pn"), default="sn", help="Reference used first in metric tables when both SN and PN are present.")
-    return p.parse_args()
+    return compare_args()
 
 
 def main():
@@ -363,7 +344,7 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    refs: list[dict] = []
+    refs = []
     sn_path, sn = load_npz(args.sn_npz)
     if sn is not None:
         refs.append({"kind": "sn", "path": sn_path, "data": sn, "label": reference_label(sn, "CE SN")})

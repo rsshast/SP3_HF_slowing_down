@@ -1,250 +1,4 @@
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-import os
-import time
-import math
-import argparse
-import csv
-import json
-from pathlib import Path
-from scipy.linalg import null_space
-import h5py
-from scipy.integrate import simpson, quad
-from numba import njit, prange
-import copy
-import psutil
-import torch # tensor decomps, gpu
-import gc
-from ce_buckled_transport_reference import build_scatter_matrix as build_ce_scatter_matrix
-
-# upscattering: easier to put outside of the class
-@njit(parallel=True)
-def build_p0_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
-    G = len(E_full)
-    N_th = G - insert_idx
-    sigma_th_all = np.zeros((N_th, G))
-
-    for i in prange(N_th):
-        # gp is the absolute index in the full grid
-        gp = insert_idx + i
-        sig_val = sigma_fr_full[gp]
-        E_prime = E_full[gp]
-
-        gmax = min(gmax_vec[gp],G)
-        for g in range(0, gmax):
-            E_exit = E_full[g]
-            val = eval_p0_kernel_numba(E_prime, E_exit, A, sig_val, kT, m, x, w)
-            sigma_th_all[i, g] = val * dE_full[g]
-
-    return sigma_th_all
-
-@njit(parallel=True)
-def build_p1_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
-    G = len(E_full)
-    N_th = G - insert_idx
-    sigma_th_all = np.zeros((N_th, G))
-
-    for i in prange(N_th):
-        gp = insert_idx + i
-        sig_val = sigma_fr_full[gp]
-        E_prime = E_full[gp]
-        gmax = min(gmax_vec[gp],G)
-
-        for g in range(0, gmax):
-            E_exit = E_full[g]
-            val = eval_p1_kernel_numba(E_prime, E_exit, A, sig_val, kT, m, x, w)
-            sigma_th_all[i, g] = val * dE_full[g]
-
-    return sigma_th_all
-
-@njit(parallel=True)
-def build_p2_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
-    G = len(E_full)
-    N_th = G - insert_idx
-    sigma_th_all = np.zeros((N_th, G))
-
-    for i in prange(N_th):
-        gp = insert_idx + i
-        sig_val = sigma_fr_full[gp]
-        E_prime = E_full[gp]
-
-        gmax = min(gmax_vec[gp],G)
-        for g in range(0, gmax):
-            E_exit = E_full[g]
-            val = eval_p2_kernel_numba(E_prime, E_exit, A, sig_val, kT, m, x, w)
-            sigma_th_all[i, g] = val * dE_full[g]
-
-    return sigma_th_all
-
-@njit(parallel=True)
-def build_p3_thermal_to_all(E_full, sigma_fr_full, gmax_vec, A, kT, m, x, w, dE_full, insert_idx):
-    G = len(E_full)
-    N_th = G - insert_idx
-    sigma_th_all = np.zeros((N_th, G))
-
-    for i in prange(N_th):
-        gp = insert_idx + i
-        sig_val = sigma_fr_full[gp]
-        E_prime = E_full[gp]
-
-        gmax = min(gmax_vec[gp],G)
-        for g in range(0, gmax):
-            E_exit = E_full[g]
-            val = eval_p3_kernel_numba(E_prime, E_exit, A, sig_val, kT, m, x, w)
-            sigma_th_all[i, g] = val * dE_full[g]
-
-    return sigma_th_all
-
-# P0 kernel
-@njit
-def eval_p0_kernel_numba(E_prime, E, A, Sigma_fr, kT, m, x, w):
-    if A == 1.0:
-        if E <= E_prime: # Downscatter
-            return (Sigma_fr / E_prime) * math.erf(np.sqrt(E / kT))
-        else: # Upscatter
-            return (Sigma_fr / E_prime) * np.exp((E_prime - E) / kT) * math.erf(np.sqrt(E_prime / kT))
-
-    kappa_min = np.sqrt(2.0 * m) * np.abs(np.sqrt(E_prime) - np.sqrt(E))
-    kappa_max = np.sqrt(2.0 * m) * (np.sqrt(E_prime) + np.sqrt(E))
-
-    half_width = 0.5 * (kappa_max - kappa_min)
-    midpoint = 0.5 * (kappa_max + kappa_min)
-    integral = 0.0
-
-    for i in range(len(x)):
-        kappa = half_width * x[i] + midpoint
-        kappa2 = kappa * kappa
-
-        exp_inner = E_prime - E - (kappa2 / (2.0 * A * m))
-        exp_arg = - (A * m) / (2.0 * kT * kappa2) * (exp_inner**2)
-
-        integrand = np.exp(exp_arg)
-        integral += w[i] * integrand
-
-    integral *= half_width
-
-    term1 = (1 + 1 / A)**2
-    term2 = np.sqrt(E / E_prime)
-    term3 = np.sqrt((A * m) / (2.0 * np.pi * kT))
-    coeff = (Sigma_fr / (8.0 * m * E_prime * E)) * term1 * term2 * term3
-
-    return coeff * integral
-
-# P1 kernel
-@njit
-def eval_p1_kernel_numba(E_prime, E, A, Sigma_fr, kT, m, x, w):
-    if A == 1.0:
-        mu_bar = np.sqrt(E / E_prime)
-        if E <= E_prime:
-            return (Sigma_fr / E_prime) * math.erf(np.sqrt(E / kT)) * mu_bar
-        else:
-            return (Sigma_fr / E_prime) * np.exp((E_prime - E) / kT) * math.erf(np.sqrt(E_prime / kT)) * mu_bar
-
-    kappa_min = np.sqrt(2.0 * m) * np.abs(np.sqrt(E_prime) - np.sqrt(E))
-    kappa_max = np.sqrt(2.0 * m) * (np.sqrt(E_prime) + np.sqrt(E))
-
-    half_width = 0.5 * (kappa_max - kappa_min)
-    midpoint = 0.5 * (kappa_max + kappa_min)
-    integral = 0.0
-
-    for i in range(len(x)):
-        kappa = half_width * x[i] + midpoint
-        kappa2 = kappa * kappa
-
-        poly_part = E_prime + E - (kappa2 / (2.0 * m))
-        exp_inner = E_prime - E - (kappa2 / (2.0 * A * m))
-        exp_arg = - (A * m) / (2.0 * kT * kappa2) * (exp_inner**2)
-
-        integrand = poly_part * np.exp(exp_arg)
-        integral += w[i] * integrand
-
-    integral *= half_width
-
-    term1 = (1 + 1 / A)**2
-    term2 = np.sqrt(E / E_prime)
-    term3 = np.sqrt((A * m) / (2.0 * np.pi * kT))
-    coeff = (Sigma_fr / (8.0 * m * E_prime * E)) * term1 * term2 * term3
-
-    return coeff * integral
-
-# P2 kernel
-@njit
-def eval_p2_kernel_numba(E_prime, E, A, Sigma_fr, kT, m, x, w):
-    if A == 1.0:
-        mu_bar = np.sqrt(E / E_prime)
-        p2_val = 0.5 * (3.0 * mu_bar**2 - 1.0)
-        if E <= E_prime:
-            return (Sigma_fr / E_prime) * math.erf(np.sqrt(E / kT)) * p2_val
-        else:
-            return (Sigma_fr / E_prime) * np.exp((E_prime - E) / kT) * math.erf(np.sqrt(E_prime / kT)) * p2_val
-
-    kappa_min = np.sqrt(2.0 * m) * np.abs(np.sqrt(E_prime) - np.sqrt(E))
-    kappa_max = np.sqrt(2.0 * m) * (np.sqrt(E_prime) + np.sqrt(E))
-
-    half_width = 0.5 * (kappa_max - kappa_min)
-    midpoint = 0.5 * (kappa_max + kappa_min)
-    integral = 0.0
-
-    for i in range(len(x)):
-        kappa = half_width * x[i] + midpoint
-        kappa2 = kappa * kappa
-
-        poly_inner = (E_prime + E - kappa2 / (2 * m)) / (2 * np.sqrt(E_prime * E))
-        poly_part = 3 * poly_inner ** 2 - 1
-        exp_inner = E_prime - E - (kappa2 / (2.0 * A * m))
-        exp_arg = - (A * m) / (2.0 * kT * kappa2) * (exp_inner**2)
-
-        integrand = poly_part * np.exp(exp_arg)
-        integral += w[i] * integrand
-
-    integral *= half_width
-
-    term1 = (1 + 1 / A)**2
-    term2 = np.sqrt(E / E_prime)
-    term3 = np.sqrt((A * m) / (2.0 * np.pi * kT))
-    coeff = (Sigma_fr / (8.0 * m * np.sqrt(E_prime * E))) * term1 * term2 * term3
-
-    return coeff * integral
-
-@njit
-def eval_p3_kernel_numba(E_prime, E, A, Sigma_fr, kT, m, x, w):
-    if A == 1.0:
-        mu_bar = np.sqrt(E / E_prime)
-        p3_val = 0.5 * (5.0 * mu_bar**3 - 3.0 * mu_bar)
-        if E <= E_prime:
-            return (Sigma_fr / E_prime) * math.erf(np.sqrt(E / kT)) * p3_val
-        else:
-            return (Sigma_fr / E_prime) * np.exp((E_prime - E) / kT) * math.erf(np.sqrt(E_prime / kT)) * p3_val
-
-    kappa_min = np.sqrt(2.0 * m) * np.abs(np.sqrt(E_prime) - np.sqrt(E))
-    kappa_max = np.sqrt(2.0 * m) * (np.sqrt(E_prime) + np.sqrt(E))
-
-    half_width = 0.5 * (kappa_max - kappa_min)
-    midpoint = 0.5 * (kappa_max + kappa_min)
-    integral = 0.0
-
-    for i in range(len(x)):
-        kappa = half_width * x[i] + midpoint
-        kappa2 = kappa * kappa
-
-        poly_inner = (E_prime + E - kappa2 / (2 * m)) / (2 * np.sqrt(E_prime * E))
-        poly_part = 5 * poly_inner ** 3 - (3 * poly_inner)
-        exp_inner = E_prime - E - (kappa2 / (2.0 * A * m))
-        exp_arg = - (A * m) / (2.0 * kT * kappa2) * (exp_inner**2)
-
-        integrand = poly_part * np.exp(exp_arg)
-        integral += w[i] * integrand
-
-    integral *= half_width
-
-    term1 = (1 + 1 / A)**2
-    term2 = np.sqrt(E / E_prime)
-    term3 = np.sqrt((A * m) / (2.0 * np.pi * kT))
-    coeff = (Sigma_fr / (8.0 * m * np.sqrt(E_prime * E))) * term1 * term2 * term3
-
-    return coeff * integral
+from input import *
 
 class Sp3:
     def __init__(
@@ -256,27 +10,24 @@ class Sp3:
         adaptive,
         xs_tol,
         wims=True,
-        group_structure="wims69.txt",
+        group_structure=group_structure,
         p0_only_upscatter=False,
         no_upscatter=False,
         thermal_upscatter_cutoff_ev=4.0,
         kernel_quad=64,
     ):
-        # directories
-        self.data_dir = 'data/'
+        self.data_dir = str(data_dir) + os.sep
         self.save_dir = "/scratch/bckiedro_root/bckiedro0/rsshast/Sp3/results/"
         self.chart_dir = "results/charts/"
         self.save_data = False
 
-        # grp constant parameters
         self.use_wims = wims
         self.group_structure = group_structure
         self.p0_only_upscatter = p0_only_upscatter
         self.no_upscatter = no_upscatter
         self.thermal_upscatter_cutoff_ev = thermal_upscatter_cutoff_ev
         if self.use_wims:
-            group_table = np.loadtxt(Path(self.data_dir) / self.group_structure)
-            self.custom_bounds = np.asarray(group_table[:, 1], dtype=float)
+            self.custom_bounds = group_edges(data_dir, self.group_structure)
             self.few_groups = self.custom_bounds.size
             self.E0 = np.max(self.custom_bounds)
             self.Emin = np.min(self.custom_bounds)
@@ -285,91 +36,38 @@ class Sp3:
             self.E0 = 1e7
             self.Emin = .01
         self.fromH5 = fromH5
-        self.nu = 2.43
+        self.nu = nu_bar
 
-        # anisotropy
         self.B2 = B2
-        self.leg_order = 4
-
-        # number densities
-        self.AH = 1
+        self.leg_order = legendre_order
+        self.AH = AH
         self.NH = NH
-        self.AU = 238
-        self.NU = .02
-        self.AO = 16
-        self.NO = .1
-        #self.NO = self.NH / 2
-        #self.NO = self.NH * 2
-
-        # mass of a neutron
-        self.m = 1 # amu
+        self.AU = AU
+        self.NU = NU
+        self.AO = AO
+        self.NO = NO
+        self.m = neutron_mass_amu
         self.nquad = kernel_quad
 
-        # point-wise cross-sections and fission spectrum
-        chi35 = pd.read_csv(f'{self.data_dir}chi_u235.txt', sep = '\t', header = 0)
-        H1 = pd.read_csv(f'{self.data_dir}xs_h1_T293k.txt', sep = '\t', header = 0)
-        U238 = pd.read_csv(f'{self.data_dir}xs_u238_T293k.txt',sep = '\t', header = 0)
-        o16_path = Path(self.data_dir) / "xs_o16_T293k.csv"
-        if not o16_path.exists():
-            o16_path = Path(self.data_dir) / "xs_o16_T293k (1).csv"
-        O16 = pd.read_csv(o16_path, sep = ';', dtype=float).to_numpy()
-        sigma_f = pd.read_csv(f'{self.data_dir}xs_u238_fission.csv', sep = ',', dtype=float).to_numpy()
-        sigma_fr_U = pd.read_csv(f"{self.data_dir}sigma_fr_U.csv",sep = ';', dtype=float).to_numpy()
-        sigma_fr_H = pd.read_csv(f"{self.data_dir}sigma_fr_H.csv",sep = ';', dtype=float).to_numpy()
+        tables = load_hf_tables(data_dir)
+        XS38 = tables["U238"]
+        chi = tables["chi"]
+        H = tables["H"]
+        O16 = tables["O16"]
+        sigma_f = tables["sigma_f"]
+        sigma_fr_U = tables["sigma_fr_U"]
+        sigma_fr_H = tables["sigma_fr_H"]
 
-        # interpolations
-        def get_adaptive_Ugrid(data, E0, Emin, tol):
-            data = data[(data[:, 0] <= E0) & (data[:, 0] >= Emin)]
-            data[:, 0] = np.log(E0 / data[:, 0])
-            sort_idx = np.argsort(data[:, 0])
-            data = data[sort_idx]
-            new_grid = [data[0]]  # first row
-
-            i = 0
-            while i < data.shape[0] - 1:  # iterate until the second last element
-                found = False
-                for j in range(i + 1, data.shape[0]):
-                    diff = 100 * np.abs(data[i, 1] - data[j, 1]) / data[i, 1]
-                    if diff >= tol:
-                        new_grid.append(data[j])  # append entire row
-                        i = j
-                        found = True
-                        break
-                if not found: break
-
-            return np.array(new_grid)
-
-        def get_adaptive_H_grid(data, new_grid, E0, Emin):
-            # data is hydrogen, new_grid is Uranium
-            data = data[(data[:, 0] <= E0) & (data[:, 0] >= Emin)]
-            data[:, 0] = np.log(E0 / data[:, 0])
-
-            # Sort
-            sort_idx = np.argsort(data[:, 0])
-            data = data[sort_idx]
-            out = np.empty((new_grid.size, data.shape[1]), dtype=float)
-            out[:, 0] = new_grid
-
-            xp = data[:, 0]
-            for i in range(1, data.shape[1]): out[:, i] = np.interp(new_grid, xp, data[:, i])
-            return out
-
-        # interpolate xs's and chi to U grid.
-        XS38 = np.array([U238['E'],U238['sigma_t'],U238['sigma_s']]).T
-        chi = np.array([chi35['E'],chi35['chi']]).T
-        H = np.array([H1['E'],H1['sigma_t'],H1['sigma_s']]).T
-
-        if adaptive == True:
-            XS38 = get_adaptive_Ugrid(XS38,self.E0,self.Emin,xs_tol)
+        if adaptive:
+            XS38 = adaptive_u_grid(XS38,self.E0,self.Emin,xs_tol)
             self.nbins = XS38.shape[0]
-            H = get_adaptive_H_grid(H,XS38[:,0], self.E0, self.Emin)
-            chi = get_adaptive_H_grid(chi,XS38[:,0], self.E0, self.Emin)
-            XS16 = get_adaptive_H_grid(O16, XS38[:,0], self.E0, self.Emin)
+            H = interp_to_u_grid(H,XS38[:,0], self.E0, self.Emin)
+            chi = interp_to_u_grid(chi,XS38[:,0], self.E0, self.Emin)
+            XS16 = interp_to_u_grid(O16, XS38[:,0], self.E0, self.Emin)
         else:
             self.nbins = nbins + 1
             chi = self.get_data(chi,self.nbins)
             H = self.get_data(H,self.nbins) 
-            #H = self.get_data(H,self.nbins) * self.NH
             XS38 = self.get_data(XS38,self.nbins)
             XS16 = self.get_data(O16, self.nbins)
 
@@ -378,9 +76,6 @@ class Sp3:
         self.Evec = self.E0 * np.exp(-self.boundaries)
         print(f"Initializing, {self.nbins - 1} Groups")
         print(f"Collapse to {self.few_groups - 1} Groups")
-        #assert (self.nbins - 1) % self.few_groups == 0, ("Number of fine bins must be multiple of number of coarse bins")
-
-        # cross-sections and number densities
         self.sigma_fr_U = self.get_data(sigma_fr_U,self.nbins)[:,1] * self.NU
         self.sigma_fr_H = self.get_data(sigma_fr_H,self.nbins)[:,1] * self.NH
         self.sig_t_U   = self.NU * XS38[:,1]
@@ -390,9 +85,9 @@ class Sp3:
         #self.sig_t_O   = self.NO * XS16[:,1]
         #self.sig_s0_O  = self.NO * XS16[:,2]
         self.sigma_f   = self.nu * (self.get_data(sigma_f,self.nbins)[:,1]) * self.NU
-        self.T         = 293.15    # degrees Kelvin
-        self.k         = 8.617e-5  # eV/K (Boltzmann constant)
-        self.kT        = self.k * self.T
+        self.T         = temperature_k
+        self.k         = boltzmann_ev_per_k
+        self.kT        = kT
 
         # declare operators
         G = self.boundaries.size
@@ -418,19 +113,7 @@ class Sp3:
         #self.sigma_s_gtg_O = np.zeros_like(self.sigma_s_gtg_U)
 
     def get_data(self,data, gridpoints):
-        data = data[(data[:, 0] <= self.E0) & (data[:, 0] >= self.Emin)]
-        data[:, 0] = np.log(self.E0 / data[:, 0])
-
-        # Sort
-        sort_idx = np.argsort(data[:, 0])
-        data = data[sort_idx]
-        new_grid = np.linspace(np.log(self.E0/self.E0), np.log(self.E0 / self.Emin), gridpoints)
-        out = np.empty((new_grid.size, data.shape[1]), dtype=float)
-        out[:, 0] = new_grid
-
-        xp = data[:, 0]
-        for i in range(1, data.shape[1]): out[:, i] = np.interp(new_grid, xp, data[:, i])
-        return out
+        return uniform_lethargy_table(data, gridpoints, self.E0, self.Emin)
 
     def initial_flux(self):
         """Compute the initial scalar flux using scattering source method nuclear engineering handbook method"""
@@ -531,7 +214,7 @@ class Sp3:
 
         sig_s = average_to_fine_bins(sigma_s)
         sig_fr = average_to_fine_bins(sigma_fr)
-        S = build_ce_scatter_matrix(
+        S = build_scatter_matrix(
             float(A),
             sig_s,
             sig_fr,
@@ -593,6 +276,36 @@ class Sp3:
         self.L3 += Ln[3,:,:]
 
         print(f"Ln A = {A} Time: {np.round(time.time()-stt,5)} s")
+
+    def load_sn_reference_xs(self, reference_npz):
+        if reference_npz is None:
+            return False
+
+        ref_path = self.resolve_reference_npz_path(reference_npz, self.save_dir)
+        if ref_path is None:
+            return False
+
+        data = material_from_npz(ref_path)
+        if data.scatter.shape[1:] != self.L0.shape or data.sigma_t.shape[0] != self.L0.shape[0]:
+            print(f"Warning: SN XS grid in '{ref_path}' does not match SP3 grid. Regenerating HF XS.")
+            return False
+
+        self.L0.fill(0.0)
+        self.L1.fill(0.0)
+        self.L2.fill(0.0)
+        self.L3.fill(0.0)
+        operators = (self.L0, self.L1, self.L2, self.L3)
+        sig_t = np.diag(data.sigma_t)
+        for ell, op in enumerate(operators[: min(len(operators), data.scatter.shape[0])]):
+            op[:] = (2 * ell + 1) * (sig_t - data.scatter[ell])
+
+        self.sigma_s_gtg_U.fill(0.0)
+        self.sigma_s_gtg_H.fill(0.0)
+        moments = min(self.sigma_s_gtg_U.shape[0], data.scatter.shape[0])
+        self.sigma_s_gtg_U[:moments] = data.scatter[:moments]
+
+        print(f"Loaded hyperfine XS from {ref_path}")
+        return True
 
     def calc_phi_torch(self, device=None, dtype=torch.float64):
         # gpu torch.linalg.solve
@@ -866,18 +579,28 @@ class Sp3:
         M_fg_2 = np.zeros_like(M_fg)
         phi = self.phi0
 
+        def weighted_sum(block, weight):
+            den = np.sum(weight)
+            if abs(den) <= 1.0e-300:
+                return 0.0
+            return np.sum(block @ weight) / den
+
         for i in range(self.few_groups): # Exit group
             r0, r1 = fg_idx[i], fg_idx[i+1]
             for j in range(self.few_groups): # Incident group
                 c0, c1 = fg_idx[j], fg_idx[j+1]
-                M_fg[i,j] = np.sum(M[r0:r1, c0:c1] @ self.phi0[c0:c1]) / np.sum(self.phi0[c0:c1])
-                M_fg_0[i,j] = np.sum(M[r0:r1, c0:c1] @ self.Phi0[c0:c1]) / np.sum(self.Phi0[c0:c1])
-                M_fg_2[i,j] = np.sum(M[r0:r1, c0:c1] @ self.Phi2[c0:c1]) / np.sum(self.Phi2[c0:c1])
+                block = M[r0:r1, c0:c1]
+                M_fg[i,j] = weighted_sum(block, self.phi0[c0:c1])
+                M_fg_0[i,j] = weighted_sum(block, self.Phi0[c0:c1])
+                M_fg_2[i,j] = weighted_sum(block, self.Phi2[c0:c1])
 
-        M_fg_norm = M_fg / np.linalg.norm(M_fg)
-        M_fg_0_norm = M_fg_0 / np.linalg.norm(M_fg_0)
         print(f"Update A={A} sigma_s{l} xs: {np.round(time.time()-stt,5)} s")
-        print(f"L2 norm on phi0 vs Phi0 weighted gtg for A={A} and l={l}: {self.L2_norm((M_fg_norm), (M_fg_0_norm))}")
+        norm = np.linalg.norm(M_fg)
+        norm_0 = np.linalg.norm(M_fg_0)
+        if norm > 1.0e-300 and norm_0 > 1.0e-300:
+            M_fg_norm = M_fg / norm
+            M_fg_0_norm = M_fg_0 / norm_0
+            print(f"L2 norm on phi0 vs Phi0 weighted gtg for A={A} and l={l}: {self.L2_norm((M_fg_norm), (M_fg_0_norm))}")
 
         return M_fg, M_fg_0, M_fg_2
 
@@ -953,6 +676,8 @@ class Sp3:
                     D_conv_2[i, j] = np.sum(D2_tr_fine[c0:c1] * self.phi0[c0:c1]) / np.sum(self.phi0[c0:c1])
 
         print(f"D_coef Time: {time.time()-stt:.3f} s")
+        #print(D_conv_0)
+        #print(D0)
         return D_conv_0, D_conv_2, D0, D2
 
     def mat_grp_constants(self,key):
@@ -1468,9 +1193,12 @@ class Sp3:
         trad_density = norm_density_from_integral(sp3["phi0_trad"], du)
 
         plt.figure(figsize=(9, 5.5))
-        plt.step(edges, np.r_[ref_density, ref_density[-1]], where="post", label=fr"{reference_label}, $k={float(reference['k_at_B2']):.6g}$")
-        plt.step(sp3_edges_desc[::-1], np.r_[new_density, new_density[-1]], where="post", label=fr"new SP3, $k={float(sp3['k_new']):.6g}$")
-        plt.step(sp3_edges_desc[::-1], np.r_[trad_density, trad_density[-1]], where="post", label=fr"traditional SP3, $k={float(sp3['k_trad']):.6g}$")
+        plt.step(edges, np.r_[ref_density, ref_density[-1]], where="post", label=fr"{reference_label}")
+        #plt.step(edges, np.r_[ref_density, ref_density[-1]], where="post", label=fr"{reference_label}, $k={float(reference['k_at_B2']):.6g}$")
+        plt.step(sp3_edges_desc[::-1], np.r_[new_density, new_density[-1]], where="post", label=fr"New SP3")
+        #plt.step(sp3_edges_desc[::-1], np.r_[new_density, new_density[-1]], where="post", label=fr"new SP3, $k={float(sp3['k_new']):.6g}$")
+        plt.step(sp3_edges_desc[::-1], np.r_[trad_density, trad_density[-1]], where="post", label=fr"Conventional SP3")
+        #plt.step(sp3_edges_desc[::-1], np.r_[trad_density, trad_density[-1]], where="post", label=fr"traditional SP3, $k={float(sp3['k_trad']):.6g}$")
         plt.xscale("log")
         plt.xlabel("Energy (eV)")
         plt.ylabel("Normalized few-group scalar flux per lethargy")
@@ -1491,8 +1219,9 @@ class Sp3:
             self.read_data()
         else:
             print(f"Starting fixed-B2 SP3 calculation. B2 = {b2:.8e}")
-            self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U, self.sigma_fr_U, verbose)
-            self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H, self.sigma_fr_H, verbose)
+            if not self.load_sn_reference_xs(ce_npz):
+                self.calc_Ln(self.AU, self.sig_t_U, self.sig_s0_U, self.sigma_fr_U, verbose)
+                self.calc_Ln(self.AH, self.sig_t_H, self.sig_s0_H, self.sigma_fr_H, verbose)
             self.precompute_sp3_operators()
 
         self.solve_fine_sp3_fixed_b2(b2)
@@ -2129,79 +1858,6 @@ class Sp3:
     def _Ln(l, sigma_t, sigma_gtg): return (2*l+1) * (np.diag(sigma_t) - sigma_gtg)
 
     @staticmethod
-    @njit(parallel=True, fastmath=True)
-    def gen_sig_sn_gtg(A, sig_s0, order, boundaries, gmax_vec, alpha, E0, phi, du, n_sub = 8):
-        # du is a vector of differences
-        assert order <= 4, (f"Order {order} Not Supproted!")
-        G = boundaries.size
-        #du = boundaries[1] - boundaries[0]
-        den = (1 - alpha) * du
-        lga = -np.log(alpha) if A != 1 else np.inf
-        sigma_gtg = np.zeros((order, G - 1, G - 1))
-        Am1 = A-1
-        Ap1 = A+1
-        K = 5 * A*A - 1
-
-        for l in range(order):
-            for gp in prange(G - 1):
-                x1 = boundaries[gp]
-                x2 = boundaries[gp+1]
-
-                for g in range(gp, min(gmax_vec[gp], G-1)):
-                    y1 = boundaries[g]
-                    y2 = boundaries[g+1]
-                    c = max(x1, y1 - lga)
-                    length = x2 - c
-                    n_steps_base = int(np.ceil(length / du[gp]))
-                    #n_steps_base = int(np.ceil(length / du))
-                    if n_steps_base < 1: n_steps_base = 1
-                    n_steps = n_steps_base * n_sub
-                    dx = length / n_steps
-
-                    # integrate
-                    acc = 0
-                    for s in range(n_steps):
-                        xm = c + (s + .5) * dx
-                        a = y1 if xm < y1 else xm
-                        bx = xm + lga
-                        b = y2 if bx > y2 else bx
-
-                        if l == 0: val = np.exp(xm-a) - np.exp(xm-b)
-
-                        elif l == 1:
-                            if A == 1: val = (1/3) * Ap1 * (np.exp(1.5 * (xm - a)) - np.exp(1.5 * (xm - b)))
-                            else: val = (Am1 * (np.exp(.5 * (xm - b)) - np.exp(0.5 * (xm - a)))
-                                 + (1/3) * Ap1 * (np.exp(1.5 * (xm - a)) - np.exp(1.5 * (xm - b))))
-
-                        elif l == 2:
-                            if A == 1:
-                                val = (0.25 * (1 - 3*A*A) * (np.exp(xm - a) - np.exp(xm - b))
-                                    + .1875 * Ap1*Ap1 * (np.exp(2*(xm - a)) - np.exp(2*(xm - b))))
-
-                            else:
-                                val = ((.375)*(Am1*Am1)*(b - a)  + 0.25 * (1 - 3*A*A) * (np.exp(xm - a) - np.exp(xm - b))
-                                    + .1875 * Ap1*Ap1 * (np.exp(2*(xm - a)) - np.exp(2*(xm - b))))
-
-                        elif l == 3:
-                            if A == 1:
-                                val = 0.0625 * (
-                                  +  2 * (Ap1**3) * (np.exp( 2.5 * (xm - a)) - np.exp( 2.5 * (xm - b)))
-                                  -  2 * Ap1 * K   * (np.exp( 1.5 * (xm - a)) - np.exp( 1.5 * (xm - b))))
-                            else:
-                                val = 0.0625 * (
-                               10 * (Am1*Am1*Am1) * (np.exp(-0.5 * (xm - a)) - np.exp(-0.5 * (xm - b)))
-                              +  2 * (Ap1*Ap1*Ap1) * (np.exp( 2.5 * (xm - a)) - np.exp( 2.5 * (xm - b)))
-                              +  6 * Am1 * K   * (np.exp( 0.5 * (xm - a)) - np.exp( 0.5 * (xm - b)))
-                              -  2 * Ap1 * K   * (np.exp( 1.5 * (xm - a)) - np.exp( 1.5 * (xm - b))))
-
-                        acc += val
-
-                    sig_foo = (sig_s0[gp] * phi[gp] * acc * dx ) / (den[gp] * phi[gp])
-                    sigma_gtg[l, gp, g] = (sig_s0[gp] * phi[gp] * acc * dx ) / (den[gp] * phi[gp])
-
-        return sigma_gtg
-
-    @staticmethod
     def diff_matrix(sigma_t,sigma_s1,B2): # sigma_s1 is a matrix
         """Traditional diffusion matrix calculation"""
         # gamma buckling correction factor
@@ -2389,53 +2045,8 @@ class Sp3:
         else: return 100 * (np.abs(M1[index,index] - M2[index,index])
                     / (np.abs(M1[index,index])))
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run SP3 few-group calculations for the CE buckled transport comparison.")
-    parser.add_argument("--fixed-b2", type=float, default=None, help="Run one fixed-B2 comparison case instead of the legacy critical search.")
-    parser.add_argument("--outdir", default="results/sp3_b2=0.0", help="Directory for fixed-B2 SP3 outputs.")
-    parser.add_argument(
-        "--ce-npz",
-        "--reference-npz",
-        dest="ce_npz",
-        default=None,
-        help=(
-            "Optional buckled reference npz for spectra plots and error metrics. "
-            "Accepts SN ce_buckled_transport_reference.npz or PN ce_buckled_pn_reference.npz."
-        ),
-    )
-    parser.add_argument("--nbins", type=int, default=int(os.getenv("SP3_FINE_GROUPS", "5000")))
-    parser.add_argument("--NH", type=float, default=float(os.getenv("SP3_NH", "0.10")))
-    parser.add_argument("--xs-tol", type=float, default=float(os.getenv("SP3_XS_TOL", "5")))
-    parser.add_argument("--group-structure", default=os.getenv("SP3_GROUP_STRUCTURE", os.getenv("CE_GROUP_STRUCTURE", "wims69.txt")))
-    parser.add_argument("--kernel-quad", type=int, default=int(os.getenv("SP3_KERNEL_QUAD", os.getenv("CE_KERNEL_QUAD", "64"))))
-    parser.add_argument("--no-upscatter", action="store_true")
-    parser.add_argument(
-        "--thermal-upscatter-cutoff-ev",
-        type=float,
-        default=float(os.getenv("SP3_THERMAL_UPSCATTER_CUTOFF_EV", os.getenv("CE_THERMAL_UPSCATTER_CUTOFF_EV", "4.0"))),
-    )
-    parser.add_argument(
-        "--p0-only-upscatter",
-        action=argparse.BooleanOptionalAction,
-        default=os.getenv("SP3_P0_ONLY_UPSCATTER", os.getenv("CE_P0_ONLY_UPSCATTER", "false")).lower() == "true",
-    )
-    parser.add_argument("--from-h5", action="store_true")
-    parser.add_argument("--adaptive", action="store_true")
-    parser.add_argument("--no-wims", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--fixed-iters", type=int, default=int(os.getenv("SP3_FIXED_ITERS", "10000")))
-    parser.add_argument("--fixed-tol", type=float, default=float(os.getenv("SP3_FIXED_TOL", "1e-10")))
-    parser.add_argument(
-        "--plot-b2-zero",
-        action=argparse.BooleanOptionalAction,
-        default=os.getenv("SP3_PLOT_B2_ZERO", "true").lower() == "true",
-        help="Include the collapsed fine-grid B2=0 reference curve on the eigen_plot. Default: true.",
-    )
-    return parser.parse_args()
-
-
 def main():
-    args = parse_args()
+    args = sp3_config()
     process = psutil.Process(os.getpid())
     stt = time.time()
     b2 = 0.0 if args.fixed_b2 is None else args.fixed_b2
@@ -2446,7 +2057,7 @@ def main():
         args.from_h5,
         args.adaptive,
         args.xs_tol,
-        wims=not args.no_wims,
+        wims=args.wims,
         group_structure=args.group_structure,
         p0_only_upscatter=args.p0_only_upscatter,
         no_upscatter=args.no_upscatter,
