@@ -278,7 +278,7 @@ class Sp3:
         print(f"Ln A = {A} Time: {np.round(time.time()-stt,5)} s")
 
     def load_sn_reference_xs(self, reference_npz):
-        if reference_npz is None:
+        if reference_npz in (None, ""):
             return False
 
         ref_path = self.resolve_reference_npz_path(reference_npz, self.save_dir)
@@ -288,6 +288,9 @@ class Sp3:
         data = material_from_npz(ref_path)
         if data.scatter.shape[1:] != self.L0.shape or data.sigma_t.shape[0] != self.L0.shape[0]:
             print(f"Warning: SN XS grid in '{ref_path}' does not match SP3 grid. Regenerating HF XS.")
+            return False
+        if data.scatter_u is None or data.scatter_h is None:
+            print(f"Warning: SN archive '{ref_path}' has total scatter only. Regenerating isotope XS.")
             return False
 
         self.L0.fill(0.0)
@@ -302,7 +305,8 @@ class Sp3:
         self.sigma_s_gtg_U.fill(0.0)
         self.sigma_s_gtg_H.fill(0.0)
         moments = min(self.sigma_s_gtg_U.shape[0], data.scatter.shape[0])
-        self.sigma_s_gtg_U[:moments] = data.scatter[:moments]
+        self.sigma_s_gtg_U[:moments] = data.scatter_u[:moments]
+        self.sigma_s_gtg_H[:moments] = data.scatter_h[:moments]
 
         print(f"Loaded hyperfine XS from {ref_path}")
         return True
@@ -676,8 +680,10 @@ class Sp3:
                     D_conv_2[i, j] = np.sum(D2_tr_fine[c0:c1] * self.phi0[c0:c1]) / np.sum(self.phi0[c0:c1])
 
         print(f"D_coef Time: {time.time()-stt:.3f} s")
-        #print(D_conv_0)
-        #print(D0)
+        print('conv')
+        print(D_conv_0)
+        print("new")
+        print(D0)
         return D_conv_0, D_conv_2, D0, D2
 
     def mat_grp_constants(self,key):
@@ -871,15 +877,19 @@ class Sp3:
         gc.collect()
 
     def solve_fine_sp3_fixed_b2(self, b2):
+        stt = time.time()
         self.B2 = b2
         B4 = b2 * b2
         LHS = self.L3210 + b2 * self.L_B2_term
         np.fill_diagonal(LHS, LHS.diagonal() + 9 * B4)
         RHS = (self.L321_source + b2 * self.L_source_B2) @ self.chi
         self.phi0 = np.linalg.solve(LHS, RHS)
+        print(f"phi0 time: {(time.time()-stt):5g}")
 
+        stt = time.time()
         RHS2 = 0.5 * (-9 * b2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
         self.phi2 = np.linalg.solve(self.L32, RHS2)
+        print(f"phi2 time: {(time.time()-stt):5g}")
         self.calc_Phi()
 
     @staticmethod
@@ -1057,6 +1067,7 @@ class Sp3:
 
     @staticmethod
     def resolve_reference_npz_path(reference_npz, outdir):
+        if reference_npz in (None, ""): return None
         ref_path = Path(reference_npz)
         default_sn = Path(outdir) / "ce_buckled_transport_reference.npz"
         default_pn = Path(outdir) / "ce_buckled_pn_reference.npz"
@@ -1075,7 +1086,8 @@ class Sp3:
             if candidate in seen:
                 continue
             seen.add(candidate)
-            if candidate.exists():
+            #if candidate.exists():
+            if candidate.is_file():
                 return candidate
         return None
 
@@ -1193,12 +1205,12 @@ class Sp3:
         trad_density = norm_density_from_integral(sp3["phi0_trad"], du)
 
         plt.figure(figsize=(9, 5.5))
-        plt.step(edges, np.r_[ref_density, ref_density[-1]], where="post", label=fr"{reference_label}")
         #plt.step(edges, np.r_[ref_density, ref_density[-1]], where="post", label=fr"{reference_label}, $k={float(reference['k_at_B2']):.6g}$")
-        plt.step(sp3_edges_desc[::-1], np.r_[new_density, new_density[-1]], where="post", label=fr"New SP3")
         #plt.step(sp3_edges_desc[::-1], np.r_[new_density, new_density[-1]], where="post", label=fr"new SP3, $k={float(sp3['k_new']):.6g}$")
-        plt.step(sp3_edges_desc[::-1], np.r_[trad_density, trad_density[-1]], where="post", label=fr"Conventional SP3")
         #plt.step(sp3_edges_desc[::-1], np.r_[trad_density, trad_density[-1]], where="post", label=fr"traditional SP3, $k={float(sp3['k_trad']):.6g}$")
+        plt.step(edges, np.r_[ref_density, ref_density[-1]], where="post", label=fr"{reference_label}")
+        plt.step(sp3_edges_desc[::-1], np.r_[new_density, new_density[-1]], where="post", label=fr"new SP3")
+        plt.step(sp3_edges_desc[::-1], np.r_[trad_density, trad_density[-1]], where="post", label=fr"conventional SP3")
         plt.xscale("log")
         plt.xlabel("Energy (eV)")
         plt.ylabel("Normalized few-group scalar flux per lethargy")
@@ -2027,13 +2039,27 @@ class Sp3:
     @staticmethod
     def normalize(vec):
         if vec.ndim != 1: raise ValueError("Vector isn't 1D")
-        return vec / np.sum(vec)
+        total = np.sum(vec)
+        if abs(total) > 1.0e-300:
+            return vec / total
+        norm = np.linalg.norm(vec)
+        if norm > 1.0e-300:
+            return vec / norm
+        return vec.copy()
 
     @staticmethod
     def L2_norm(A,B):
-        A = A / np.sum(A)
-        B = B / np.sum(B)
         assert A.shape == B.shape, ("L2 norm shape mismatch!")
+        A_sum = np.sum(A)
+        B_sum = np.sum(B)
+        A_scale = abs(A_sum) if abs(A_sum) > 1.0e-300 else np.linalg.norm(A)
+        B_scale = abs(B_sum) if abs(B_sum) > 1.0e-300 else np.linalg.norm(B)
+        if A_scale <= 1.0e-300 and B_scale <= 1.0e-300:
+            return 0.0
+        if A_scale <= 1.0e-300 or B_scale <= 1.0e-300:
+            return float("nan")
+        A = A / A_scale
+        B = B / B_scale
         return np.linalg.norm(A-B, ord=2)
 
     @staticmethod

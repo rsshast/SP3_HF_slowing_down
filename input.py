@@ -66,7 +66,8 @@ fixed_iters = int(os.getenv("FIXED_ITERS", os.getenv("SP3_FIXED_ITERS", "10000")
 fixed_tol = float(os.getenv("FIXED_TOL", os.getenv("SP3_FIXED_TOL", "1e-10")))
 plot_b2_zero = os.getenv("PLOT_B2_ZERO", os.getenv("SP3_PLOT_B2_ZERO", "true"))
 no_upscatter = os.getenv("NO_UPSCATTER", os.getenv("SP3_NO_UPSCATTER", os.getenv("CE_NO_UPSCATTER", "false")))
-p0_only_upscatter = os.getenv("P0_ONLY_UPSCATTER", os.getenv("SP3_P0_ONLY_UPSCATTER", os.getenv("CE_P0_ONLY_UPSCATTER", "true")))
+p0_only_upscatter = os.getenv("P0_ONLY_UPSCATTER", os.getenv("SP3_P0_ONLY_UPSCATTER", os.getenv("CE_P0_ONLY_UPSCATTER", "false")))
+#p0_only_upscatter = os.getenv("P0_ONLY_UPSCATTER", os.getenv("SP3_P0_ONLY_UPSCATTER", os.getenv("CE_P0_ONLY_UPSCATTER", "true")))
 thermal_upscatter_cutoff_ev = float(os.getenv("THERMAL_UPSCATTER_CUTOFF_EV", os.getenv("SP3_THERMAL_UPSCATTER_CUTOFF_EV", os.getenv("CE_THERMAL_UPSCATTER_CUTOFF_EV", "4.0"))))
 thermal_upscatter_nuclides = os.getenv("THERMAL_UPSCATTER_NUCLIDES", os.getenv("CE_THERMAL_UPSCATTER_NUCLIDES", "H,U"))
 
@@ -111,6 +112,8 @@ class MaterialData:
     scatter: np.ndarray
     group_edges_e: np.ndarray
     group_names: list[str]
+    scatter_u: object = None
+    scatter_h: object = None
 
 
 def env_bool(name, default=False):
@@ -764,6 +767,7 @@ def build_scatter_matrix(
     p0_only_upscatter,
     thermal_cutoff_ev,
 ):
+    stt = time.time()
     du = np.diff(u_bounds)
     alpha = alpha_fn(A)
     gmax_vec = gmax_vec_fn(u_bounds, A, lga_fn(alpha))
@@ -774,7 +778,7 @@ def build_scatter_matrix(
         thermal = np.where(e_mid <= thermal_cutoff_ev)[0]
         if thermal.size:
             insert_idx = int(thermal[0])
-            exit_start_idx = insert_idx
+            exit_start_idx = 0
             x, w = np.polynomial.legendre.leggauss(nquad)
             dE = np.abs(np.diff(e_bounds))
             for ell in range(order):
@@ -805,7 +809,13 @@ def build_scatter_matrix(
                     f"minimum scale={min_p0_scale:.8e}"
                 )
 
-    return np.transpose(sigma_gtg, (0, 2, 1))
+    scatter = np.transpose(sigma_gtg, (0, 2, 1))
+    print(
+        f"XS generation A={A:g}, moments={order}, groups={sig_s0.size}, "
+        f"upscatter={upscatter}, wall={time.time() - stt:.5f} s"
+    )
+    return scatter
+    #return np.transpose(sigma_gtg, (0, 2, 1))
 
 
 def thermal_upscatter_enabled(args, name):
@@ -937,6 +947,8 @@ def load_problem(args, reuse_sn=False):
         scatter=scatter,
         group_edges_e=group_edges_e,
         group_names=[f"g{i + 1}" for i in range(group_edges_e.size - 1)],
+        scatter_u=scatter_u,
+        scatter_h=scatter_h,
     )
 
 
@@ -965,6 +977,8 @@ def material_from_npz(path):
             scatter=archive["scatter"],
             group_edges_e=archive["group_edges_e"],
             group_names=[f"g{i + 1}" for i in range(archive["group_edges_e"].size - 1)],
+            scatter_u=archive["scatter_u"] if "scatter_u" in archive.files else None,
+            scatter_h=archive["scatter_h"] if "scatter_h" in archive.files else None,
         )
 
 
