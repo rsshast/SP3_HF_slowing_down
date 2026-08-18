@@ -337,7 +337,7 @@ class Sp3:
         # phi2
         stt = time.time()
         LHS2 = L3 @ L2
-        RHS2 = 0.5 * (-9 * B2 * phi0 + (9 * L1 + 4 * L3) @ (L0 @ phi0 - chi))
+        RHS2 = 0.5 * (9 * B2 * phi0 + (9 * L1 + 4 * L3) @ (L0 @ phi0 - chi))
         phi2 = torch.linalg.solve(LHS2, RHS2.unsqueeze(-1)).squeeze(-1)
         print(f"phi2 Time (torch): {time.time() - stt:.5f} s")
 
@@ -383,7 +383,7 @@ class Sp3:
             B2 = self.B2[i]
             print(f"phi2, {i}, B2 = {np.round(B2,5)}")
             LHS = self.L3 @ self.L2
-            RHS = .5 * (-9 * B2 * p0[i,:] + (9 * self.L1 + 4 * self.L3)
+            RHS = .5 * (9 * B2 * p0[i,:] + (9 * self.L1 + 4 * self.L3)
                     @ (self.L0 @ p0[i,:] - self.chi))
             phi2 = np.linalg.solve(LHS,RHS)
             phi2 = self.normalize(phi2)
@@ -473,7 +473,7 @@ class Sp3:
         if properties:
             print("phi2 matrix properties")
             self.print_mat_properties(LHS)
-        RHS = .5 * (-9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ self.phi0 - self.chi))
+        RHS = .5 * (9 * self.B2 * self.phi0 + (9 * self.L1 + 4 * self.L3) @ (self.L0 @ self.phi0 - self.chi))
         self.phi2 = np.linalg.solve(LHS,RHS)
         print(f"phi2 Time: {np.round(time.time()-stt,5)} s")
 
@@ -680,10 +680,10 @@ class Sp3:
                     D_conv_2[i, j] = np.sum(D2_tr_fine[c0:c1] * self.phi0[c0:c1]) / np.sum(self.phi0[c0:c1])
 
         print(f"D_coef Time: {time.time()-stt:.3f} s")
-        print('conv')
-        print(D_conv_0)
-        print("new")
-        print(D0)
+        #print('conv')
+        #print(D_conv_0)
+        #print("new")
+        #print(D0)
         return D_conv_0, D_conv_2, D0, D2
 
     def mat_grp_constants(self,key):
@@ -887,7 +887,8 @@ class Sp3:
         print(f"phi0 time: {(time.time()-stt):5g}")
 
         stt = time.time()
-        RHS2 = 0.5 * (-9 * b2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
+        RHS2 = 0.5 * (9 * b2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
+        #RHS2 = 0.5 * (-9 * b2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
         self.phi2 = np.linalg.solve(self.L32, RHS2)
         print(f"phi2 time: {(time.time()-stt):5g}")
         self.calc_Phi()
@@ -1317,7 +1318,7 @@ class Sp3:
                 self.phi0 = np.linalg.solve(LHS, RHS)
 
                 # Solve phi2
-                RHS2 = 0.5 * (-9 * self.B2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
+                RHS2 = 0.5 * (9 * self.B2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
                 self.phi2 = np.linalg.solve(self.L32, RHS2)
 
                 print(f"Hyperfine Solve Time: {time.time()-stt:.5f} s")
@@ -1383,7 +1384,7 @@ class Sp3:
                 RHS = (self.L321_source + self.B2 * self.L_source_B2) @ self.chi
                 self.phi0 = np.linalg.solve(LHS, RHS)
 
-                RHS2 = 0.5 * (-9 * self.B2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
+                RHS2 = 0.5 * (9 * self.B2 * self.phi0 + self.L_phi2_source @ (self.L0 @ self.phi0 - self.chi))
                 self.phi2 = np.linalg.solve(self.L32, RHS2)
                 self.calc_Phi()
 
@@ -2060,7 +2061,7 @@ class Sp3:
             return float("nan")
         A = A / A_scale
         B = B / B_scale
-        return np.linalg.norm(A-B, ord=2)
+        return np.linalg.norm(A-B, ord=2) 
 
     @staticmethod
     def get_percent_diff(M1,M2,index):
